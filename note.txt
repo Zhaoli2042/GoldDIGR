@@ -1,0 +1,4 @@
+last_record = 487
+for a in range(0, 1000):
+    text_string = links[a]
+    if (len(text_string) > 100) and a < last_record: continue
