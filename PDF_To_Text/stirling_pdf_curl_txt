@@ -1,0 +1,12 @@
+#!/bin/bash
+
+PDF_Dir=PDF/
+
+for f in $PDF_Dir/*.pdf; do
+  name=${f%.pdf*}
+  cp try_curl_api_template try_curl_api
+  sed -i 's|NAME|'$name'|g' try_curl_api
+  short_name="${name#*$PDF_Dir}"
+  ./try_curl_api > PDF-To-Text/$short_name.txt
+  echo "$name DONE!"
+done
