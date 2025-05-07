@@ -22,7 +22,11 @@ jobs:
       - name: Run merge script
         run: |
           cd Searches/
-          python Gather-PoP-links.py
+          python Gather-PoP-links.py Wiley
+          python Gather-PoP-links.py SpringerNature
+          python Gather-PoP-links.py Elsevier
+          python Gather-PoP-links.py RSC
+          python Gather-PoP-links.py ACS
 
       - name: Commit merged CSVs
         run: |

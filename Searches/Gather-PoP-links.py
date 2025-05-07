@@ -1,9 +1,14 @@
 import pandas as pd
 import glob
 import os
+import sys
 
-# Define the folder where the CSV files are stored.
-folder_path = "SpringerNature"  # Update this to your folder path
+# Get folder path from command-line argument
+if len(sys.argv) < 2:
+    print("Usage: python merge_csvs.py <folder_path>")
+    sys.exit(1)
+
+folder_path = sys.argv[1]
 
 # Recursively get all CSV files in the folder and its subfolders.
 csv_files = glob.glob(os.path.join(folder_path, "**", "*.csv"), recursive=True)
