@@ -4,24 +4,15 @@ from extract_links import _looks_like_download
 from pathlib import Path
 import time
 import pandas as pd
-# Simple GET
-# a PDF + CIF
-#text_string = "https://pubs.rsc.org/en/content/articlelanding/2025/cy/d5cy00187k"
-# 1 PDF + 2 excel
-#text_string = "https://pubs.rsc.org/en/content/articlelanding/2025/sc/d5sc01557j"
-# 1 PDF + 2 CIF
-#text_string = "https://pubs.rsc.org/en/content/articlelanding/2025/sc/d5sc02085a"
-# 1 PDF + MP4
-#text_string = "https://pubs.rsc.org/en/content/articlelanding/2025/sc/d5sc01663k"
 
-# long url
-#text_string = "https://pubs.rsc.org/en/content/articlehtml/2025/cc/d5cc00650c?casa_token=nl4-n9mExngAAAAA:HlB3yybMiQlSoEhXkNfvlrTMXJDkUUhcWCOn4kWKp52vVK74Vyg4UO0V4GyrYt1DdsR-A5WKkwGg5w"
-
-df = pd.read_csv("merged_URL_reaction_class_RSC.csv")
+df = pd.read_csv("filtered_SpringerNature_merged_URL_reaction_class.csv")
 links = df['ArticleURL']
-for a in range(200, 1000):
+last_record = 0
+#headers = {"User-Agent": "TDMCrawler"}
+headers = {}
+ReadDOI = False
+for a in range(0 + last_record, 3):
     text_string = links[a]
-    headers = {"User-Agent": "TDMCrawler"}
     r = requests.get(text_string, 
                      timeout=100, 
                      headers = headers,
@@ -31,17 +22,25 @@ for a in range(200, 1000):
         if r.status_code == 200:
             for chunk in r.iter_content(2048):
                 f.write(chunk)
-    
-    doi = None
+
+    if not ReadDOI: doi = text_string.split('/')[-1].upper()
+    else: doi = None
+
     for link in extract_links_from_file("output.txt", 
                                         base_url = text_string):
-        if "doi.org" in link:
+        if ReadDOI and "doi.org" in link:
             if doi is not None: continue
             print(link)
             doi = link.split('/')[-1]
+            print(doi)
+        # Remove strange symbols
+        doi = doi.translate(str.maketrans('', '', '&^'))
         if _looks_like_download(link):
-            print(link)
-            smart_click(link, save_dir = "./SI/")
+            try:
+                smart_click(link, save_dir = "./SI/")
+            except:
+                print(f"{link} cannot be clicked!")
+            time.sleep(2)
     if doi is not None:
         Path("output.txt").rename(f"./Paper-Raw/{doi}.txt")
     
