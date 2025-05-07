@@ -8,7 +8,7 @@ import pandas as pd
 df = pd.read_csv("filtered_SpringerNature_merged_URL_reaction_class.csv")
 links = df['ArticleURL']
 last_record = 0
-#headers = {"User-Agent": "TDMCrawler"}
+#headers = {"User-Agent": "TDMCrawler"} # RSC Requirements
 headers = {}
 ReadDOI = False
 for a in range(0 + last_record, 3):
