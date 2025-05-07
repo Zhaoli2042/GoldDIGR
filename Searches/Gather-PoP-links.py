@@ -3,7 +3,7 @@ import glob
 import os
 
 # Define the folder where the CSV files are stored.
-folder_path = "Wiley"  # Update this to your folder path
+folder_path = "SpringerNature"  # Update this to your folder path
 
 # Recursively get all CSV files in the folder and its subfolders.
 csv_files = glob.glob(os.path.join(folder_path, "**", "*.csv"), recursive=True)
