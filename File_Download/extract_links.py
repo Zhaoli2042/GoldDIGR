@@ -20,7 +20,7 @@ import mimetypes
 #from test_requests_package import AU
 # ----------------------------------------------------------------------
 AUTO_DOWNLOAD_EXTS = {".pdf", ".xyz", ".cif", ".txt", ".xlsx", ".mol",
-                      ".mol2", ".data", ".docx", ".pdb"}
+                      ".mol2", ".data", ".docx", ".pdb", ".zip", ".csv"}
 # ----------------------------------------------------------------------
 # core regular expression for href= / src=
 _ATTR_RE = re.compile(

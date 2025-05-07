@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# rename_underscores.sh
+# Recursively replace every "_" in file names with "-".
+
+shopt -s globstar nullglob   # ** recursion + empty‑glob safety
+for path in **/*‑*; do       # only matches names that contain “_”
+    # Skip if it’s a directory (remove the -f check if you also want to rename folders)
+    [[ -f $path ]] || continue
+
+    dir=${path%/*}           # directory part (empty if in .)
+    base=${path##*/}         # file name part
+    newbase=${base//‑/-}     # replace ALL underscores with hyphens
+    newpath=${dir:+$dir/}$newbase   # rebuild full path
+
+    # If the target name already exists, don’t clobber it.
+    if [[ -e $newpath ]]; then
+        printf 'Skipping "%s" → "%s": target exists!\n' "$path" "$newpath" >&2
+        continue
+    fi
+
+    mv -- "$path" "$newpath"
+done
