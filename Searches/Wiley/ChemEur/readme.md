@@ -1,1 +1,1 @@
-Chemistry, A European Journal
+Chemistry: A European Journal
