@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+#
+#  count_and_copy_ts.sh
+#
+#  Count every file whose *name* (not contents) contains “ts” (case-insensitive),
+#  copy each one to a destination directory, and (if a name clash occurs)
+#  keep the existing file and save the new copy with a numeric suffix.
+#
+#  Usage:
+#      ./count_and_copy_ts.sh [SOURCE_DIR] [DEST_DIR]
+#
+#      SOURCE_DIR – folder to search (default = current directory)
+#      DEST_DIR   – where copies go     (default = ./ts_files)
+#
+#  Examples:
+#      ./count_and_copy_ts.sh
+#      ./count_and_copy_ts.sh /data /backup/ts_hits
+#
+set -euo pipefail
+
+SRC="${1:-.}"
+DST="${2:-./ts_files}"
+
+mkdir -p -- "$DST"
+
+# Build array of matches (case-insensitive, any depth, regular files only)
+mapfile -d '' -t ts_files < <(find "$SRC" -type f -iname '*ts*' -print0)
+
+echo "Found ${#ts_files[@]} file(s) containing “ts” in their name."
+
+for f in "${ts_files[@]}"; do
+    base=$(basename -- "$f")            # original filename only
+    target="$DST/$base"                 # default target path
+
+    # If a file with that name already exists in DEST, add a suffix
+    if [[ -e "$target" ]]; then
+        name="${base%.*}"               # part before last “.”
+        ext="${base##*.}"               # part after last “.” (may be whole name)
+        [[ "$name" == "$ext" ]] && ext=""   # handle files with no “.” in name
+
+        i=1
+        while : ; do
+            if [[ -n "$ext" ]]; then
+                candidate="$DST/${name}_${i}.${ext}"
+            else
+                candidate="$DST/${name}_${i}"
+            fi
+            [[ ! -e "$candidate" ]] && { target="$candidate"; break; }
+            ((i++))
+        done
+    fi
+
+    cp -- "$f" "$target"
+done
+
