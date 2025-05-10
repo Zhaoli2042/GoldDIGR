@@ -75,7 +75,8 @@ def _looks_like_download(url: str) -> bool:
     """
     Quick heuristic based on extension before the query string.
     """
-    path = urlsplit(url).path.lower()
+    #path = urlsplit(url).path.lower()
+    path = url
     return any(path.endswith(ext) for ext in AUTO_DOWNLOAD_EXTS)
 
 def smart_click(url: str, *, save_dir: str | Path = ".", timeout: int = 15) -> Path | None:
