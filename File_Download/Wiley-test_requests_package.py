@@ -8,18 +8,6 @@ import pandas as pd
 import sys, pathlib
 import webbrowser
 
-#from timeout_functions import run_with_timeout
-#df = pd.read_csv("filtered_SpringerNature_merged_URL_reaction_class.csv")
-#links = df['ArticleURL']
-last_record = 0
-#headers = {"User-Agent": "TDMCrawler"} # RSC Requirements
-#links = ['https://api.wiley.com/onlinelibrary/tdm/v1/articles/0.1002/anie.201300056']
-links = ['https://onlinelibrary.wiley.com/doi/10.1002/anie.201300056']
-headers = {
-  'Accept': 'text/html',
-  'User-agent': 'Mozilla/5.0'
-}
-
 """
 Automate a browser to click a link and save the resulting HTML.
 Requires: selenium ≥ 4.19, webdriver-manager ≥ 4.0, Firefox + geckodriver.
@@ -35,6 +23,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.firefox import GeckoDriverManager
 
 from selenium.common.exceptions import TimeoutException
+from urllib3.exceptions import ReadTimeoutError
 
 import pathlib
 
@@ -78,7 +67,7 @@ dwnld_opt.set_preference("pdfjs.disabled", True)                # :contentRefere
 # ─────────────────────────────────────────────────────────────────────driver = webdriver.Firefox(options=opts)
 
 
-for a in range(2, 10):
+for a in range(282, 500):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -112,8 +101,12 @@ for a in range(2, 10):
                 #driver.get(link)
                 print(link)
                 try:
+                    DOWNLOAD_DIR = Path.cwd() / "downloads" / str(a)
+                    DOWNLOAD_DIR.mkdir(exist_ok=True)
+                    dwnld_opt.set_preference("browser.download.dir", 
+                                             str(DOWNLOAD_DIR))
                     new_driver = webdriver.Firefox(options = dwnld_opt)
-                    new_driver.set_page_load_timeout(5)   # 15-second cap
+                    new_driver.set_page_load_timeout(15)   # 15-second cap
                     #run_with_timeout(new_driver.get(link), .5)
                     new_driver.get(link)
                 # WebDriverWait(new_driver, 5).until(
@@ -121,10 +114,16 @@ for a in range(2, 10):
                 # )
                 except TimeoutException:
                     print("DONEEE!!!!")
+                except:
+                    with open("errors.log", "a", encoding="utf-8") as log:
+                        log.write(f"CANNOT PROCESS LINK {link} for paper {a}, {links[a]}")
                 finally:
                     #print("GOOD!")
                     new_driver.quit()
                 time.sleep(2)
+    except ReadTimeoutError:
+        print(f"{links[a]} time out")
+        driver.quit()
     finally:
         print("DPONE")
-        time.sleep(10)
+        time.sleep(12)
