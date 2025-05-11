@@ -62,12 +62,20 @@ dwnld_opt.set_preference("browser.helperApps.neverAsk.openFile",  mime_types)
 # ② Disable all internal viewers so they don’t steal the download
 dwnld_opt.set_preference("browser.download.viewableInternally.enabledTypes", "")
 
+dwnld_opt.set_preference("browser.download.manager.showAlertOnComplete", False)
+dwnld_opt.set_preference("browser.download.manager.closeWhenDone", True)
+dwnld_opt.set_preference("browser.download.alwaysOpenPanel", False)
+dwnld_opt.set_preference("browser.download.manager.useWindow", False)
+dwnld_opt.set_preference("browser.download.manager.focusWhenStarting", False)
+dwnld_opt.set_preference("dom.disable_beforeunload", True)
+dwnld_opt.set_preference("browser.download.manager.quitBehavior", 1)
+
 # (optional) disable the built-in PDF viewer if you also save PDFs
 dwnld_opt.set_preference("pdfjs.disabled", True)                # :contentReference[oaicite:1]{index=1}
 # ─────────────────────────────────────────────────────────────────────driver = webdriver.Firefox(options=opts)
 
 
-for a in range(282, 500):
+for a in range(786, 2000):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -105,10 +113,14 @@ for a in range(282, 500):
                     DOWNLOAD_DIR.mkdir(exist_ok=True)
                     dwnld_opt.set_preference("browser.download.dir", 
                                              str(DOWNLOAD_DIR))
+                    dwnld_opt.page_load_strategy = "eager"
                     new_driver = webdriver.Firefox(options = dwnld_opt)
-                    new_driver.set_page_load_timeout(15)   # 15-second cap
+                    new_driver.set_page_load_timeout(20)   # 15-second cap
                     #run_with_timeout(new_driver.get(link), .5)
                     new_driver.get(link)
+                    WebDriverWait(driver, 10).until(
+                        lambda d: d.execute_script("return document.readyState") == "complete"
+                    )
                 # WebDriverWait(new_driver, 5).until(
                 #     lambda d: d.execute_script("return document.readyState") == "complete"
                 # )
