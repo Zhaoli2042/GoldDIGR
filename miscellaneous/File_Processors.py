@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Callable, Dict
 from separate_xyz import split_xyz_files
 from docx_to_txt import DOCX_TO_TXT
+from xlsx_to_txt import XLSX_TO_TXT
 
 # --------------------------------------------------
 # Configuration
@@ -35,6 +36,18 @@ IGNORE_PATTERNS = ["*Raw*", "__MACOSX"]
 # --------------------------------------------------
 # Helper utilities
 # --------------------------------------------------
+
+# Skip if there are "Raw-" folders
+def has_raw_dirs(root: str | Path) -> bool:
+    root = Path(root).expanduser().resolve()
+    raw_dirs = [p for p in root.rglob('*') if p.is_dir() and p.name.startswith('Raw-')]
+    if raw_dirs:
+        print("Found Raw- directories:")
+        # for d in raw_dirs:
+        #     print("  •", d)
+        return True
+    else:
+        return False
 
 def is_in_ignored_dir(p: Path) -> bool:
     """Return *True* if *p* resides in (or *is*) a directory matching IGNORE_PATTERNS."""
@@ -82,12 +95,21 @@ def process_docx(file_path: Path, dest_dir: Path) -> None:
         DOCX_TO_TXT(new_path)
     except:
         print(f"CANNOT PROCESS DOCX for {new_path}")
+        
+def process_xlsx(file_path: Path, dest_dir: Path) -> None:
+    new_path = copy_unique(file_path, dest_dir)
+    try:
+        XLSX_TO_TXT(new_path)
+    except:
+        print(f"CANNOT PROCESS XLSX for {new_path}")
+        
 # Register handlers – extend this dict to support more types
 HANDLERS: Dict[str, Callable[[Path, Path], None]] = {
     ".xyz":  process_xyz,
     ".pdf":  process_pdf,
     ".txt":  process_txt,
     ".docx": process_docx,
+    ".xlsx": process_xlsx,
 }
 
 # --------------------------------------------------
@@ -95,18 +117,18 @@ HANDLERS: Dict[str, Callable[[Path, Path], None]] = {
 # --------------------------------------------------
 HOME_DIR: Path = Path(".").expanduser().resolve()
 
-for folder in HOME_DIR.rglob("*/"):
+for folder in HOME_DIR.rglob("combined-DOI/*/"):
     print(folder)
     ROOT_DIR = folder
-    directory = "S41467-018-03793-W"
-    ROOT_DIR: Path = Path(directory).expanduser().resolve()
+    if has_raw_dirs(ROOT_DIR): continue
     
     # Mapping from file extension → destination directory in $HOME
     DESTDIRS: Dict[str, Path] = {
-        ".xyz": ROOT_DIR / "Raw-XYZ",
-        ".pdf": ROOT_DIR / "Raw-PDF",
-        ".txt": ROOT_DIR / "Raw-TXT",
+        ".xyz":  ROOT_DIR / "Raw-XYZ",
+        ".pdf":  ROOT_DIR / "Raw-PDF",
+        ".txt":  ROOT_DIR / "Raw-TXT",
         ".docx": ROOT_DIR / "Raw-DOCX",
+        ".xlsx": ROOT_DIR / "Raw-XLSX",
     }
     if not ROOT_DIR.is_dir():
         raise SystemExit(f"ROOT_DIR '{ROOT_DIR}' does not exist or is not a directory.")
