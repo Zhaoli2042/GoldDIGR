@@ -102,35 +102,9 @@ def split_one_xyz(xyz_path: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
-def main():
-    parser = argparse.ArgumentParser(
-        description="Split every multi-structure XYZ file in a directory."
-    )
-    parser.add_argument(
-        "directory",
-        nargs="?",
-        default=".",
-        help="Target directory (default: current directory)",
-    )
-    args = parser.parse_args()
-    target_dir = Path(args.directory).expanduser().resolve()
-
-    if not target_dir.is_dir():
-        raise SystemExit(f"❌  {target_dir} is not a directory")
-
-    xyz_files = sorted(target_dir.glob("*.xyz"))
-    if not xyz_files:
-        print("No .xyz files found.")
-        return
-
-    print(f"Scanning {target_dir} ...")
-    for f in xyz_files:
-        blocks = split_one_xyz(f)
-        if blocks > 1:
-            print(f"  ▶  {f.name}: split into {blocks} structures")
-        else:
-            print(f"  ▫  {f.name}: single structure – skipped")
-
-
-if __name__ == "__main__":
-    main()
+def split_xyz_files(f):
+    blocks = split_one_xyz(f)
+    # if blocks > 1:
+    #     print(f"  ▶  {f.name}: split into {blocks} structures")
+    # else:
+    #     print(f"  ▫  {f.name}: single structure – skipped")
