@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# rename_amp_dirs_here.sh
+#
+# Rename every directory in **the current working directory** whose
+# name contains an “&”.  The new name is the part before the first “&”.
+# If that name already exists, add “_2”, “_3”, … until it is unique.
+#
+# Usage:
+#   chmod +x rename_amp_dirs_here.sh
+#   ./rename_amp_dirs_here.sh
+#
+
+set -euo pipefail
+export LC_ALL=C            # stable collation/word-splitting rules
+
+# Find only directories in “.” whose names contain “&”.
+find . -maxdepth 1 -mindepth 1 -type d -name '*&*' -print0 |
+while IFS= read -r -d '' dir; do
+    dir=${dir#./}                        # strip leading “./”
+    before_amp=${dir%%&*}                # text before first “&”
+    # Trim possible trailing spaces.
+    new_base=$(printf '%s' "$before_amp" | sed 's/[[:space:]]*$//')
+
+    # Skip if no characters remain (e.g., “&folder” → empty).
+    [[ -z "$new_base" ]] && {
+        printf 'Skipping “%s” – new name would be empty.\n' "$dir"
+        continue
+    }
+
+    candidate=$new_base
+    idx=2
+    # Avoid name clashes in the current directory.
+    while [[ -e "$candidate" ]]; do
+        candidate="${new_base}_$idx"
+        ((idx++))
+    done
+
+    printf 'Renaming: “%s”  →  “%s”\n' "$dir" "$candidate"
+    mv -- "$dir" "$candidate"
+done
+
