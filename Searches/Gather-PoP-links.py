@@ -3,6 +3,30 @@ import glob
 import os
 import sys
 
+def save_with_new_entries(df: pd.DataFrame, output_filename: str) -> None:
+    """Write *df* to *output_filename*.
+
+    If *output_filename* already exists, compare the *ArticleURL* column and
+    write only the brand‑new rows (those whose ArticleURL is **not** present in
+    the existing file) into **new-*output_filename*** instead of touching the
+    original file.
+    """
+    if os.path.exists(output_filename):
+        print(f"[INFO] Existing file '{output_filename}' detected – checking for new links…")
+        existing_df = pd.read_csv(output_filename)
+        new_rows = df[~df["ArticleURL"].isin(existing_df["ArticleURL"])]
+
+        if new_rows.empty:
+            print("[INFO] No new ArticleURL entries found – nothing to write.")
+            return
+
+        new_filename = f"new-{output_filename}"
+        new_rows.to_csv(new_filename, index=False)
+        print(f"[SUCCESS] {len(new_rows)} new rows written to '{new_filename}'.")
+    else:
+        df.to_csv(output_filename, index=False)
+        print(f"[SUCCESS] Output written to '{output_filename}'.")
+
 # Get folder path from command-line argument
 if len(sys.argv) < 2:
     print("Usage: python merge_csvs.py <folder_path>")
@@ -72,6 +96,6 @@ if basename and basename != ".":
 
 # Save the final DataFrame to CSV.
 output_filename = f"{prefix}merged_URL_reaction_class.csv"
-final_df.to_csv(output_filename, index=False)
+save_with_new_entries(final_df, output_filename)
 
 print(f"Processing complete. The merged CSV has been saved as '{output_filename}'.")
