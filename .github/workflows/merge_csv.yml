@@ -27,6 +27,7 @@ jobs:
           python Gather-PoP-links.py Elsevier
           python Gather-PoP-links.py RSC
           python Gather-PoP-links.py ACS
+          python Gather-PoP-links.py AAAS
 
       - name: Commit merged CSVs
         run: |
