@@ -154,7 +154,7 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR):
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(309, 1000):
+for a in range(326, 1000):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
