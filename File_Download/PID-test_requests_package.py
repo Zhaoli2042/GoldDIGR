@@ -101,7 +101,7 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR):
         dwnld_opt.add_argument("--headless")  
         new_driver = webdriver.Firefox(options = dwnld_opt)
         pid_holder["pid"] = new_driver.service.process.pid
-        new_driver.set_page_load_timeout(0.5)   # 15-second cap
+        new_driver.set_page_load_timeout(5)   # 15-second cap
         new_driver.get(link)
         
     except TimeoutException:
