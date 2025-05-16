@@ -35,7 +35,7 @@ from selenium.webdriver.common.keys import Keys
 HTML_DIR = Path.cwd() / "HTML"
 HTML_DIR.mkdir(exist_ok=True)
 
-df = pd.read_csv("AAAS_merged_URL_reaction_class.csv")
+df = pd.read_csv("ACS_merged_URL_reaction_class.csv")
 links = df['ArticleURL']
 # 1. Launch a **real** (headless) Firefox browser
 opts = Options()
@@ -126,7 +126,7 @@ def watchdog():
         print(f"✗ download exceeded {TIMEOUT}s → killing tree rooted at {pid}")
         kill_process_tree(pid)
 
-def download_worker(dwnld_opt, DOWNLOAD_DIR):
+def download_worker(dwnld_opt, DOWNLOAD_DIR, link):
     start = time.time()
     try:
         dwnld_opt.set_preference("browser.download.dir", 
@@ -143,18 +143,18 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR):
     except TimeoutException:
         print("DONEEE!!!!")
     except:
-        with open("errors.log", "a", encoding="utf-8") as log:
-            log.write(f"CANNOT PROCESS LINK {link} for paper {a}, {links[a]}\n")
             new_driver.quit()
     finally:
         try:
+            with open(str(DOWNLOAD_DIR) + "/links.log", "a", encoding="utf-8") as log:
+                log.write(f"{link}\n")
             new_driver.quit()
         except:
             pass
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(326, 1000):
+for a in range(2051, 2100):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -186,6 +186,9 @@ for a in range(326, 1000):
         for link in page_links:
             if _looks_like_download(link) and "RecruitmentKit" not in link:
                 pid_holder  = {"pid": None}              # filled by worker thread
+                # set cookie = 0 if the link is pdf
+                if (".pdf" in link): link += "?cookieSet=0" # seems only works with ACS
+                # only works on laptop
                 #driver.get(link)
                 print(link)
                 DOWNLOAD_DIR = Path.cwd() / "downloads" / str(a)
@@ -193,7 +196,7 @@ for a in range(326, 1000):
                 # ── run the two threads ─────────────────────────────────────────────
                 t_worker   = threading.Thread(target=download_worker, 
                                               args=(dwnld_opt, 
-                                                    DOWNLOAD_DIR), daemon=True)
+                                                    DOWNLOAD_DIR, link), daemon=True)
                 t_watchdog = threading.Thread(target=watchdog, 
                                               daemon=True)
                 t_worker.start()
@@ -201,14 +204,7 @@ for a in range(326, 1000):
                 
                 t_worker.join()
                 t_watchdog.join()
-                # try:
-                #     new_driver.quit()
-                # finally:
-                #     pass
-                # try:
-                #     os.kill(pid_holder['pid'], 9)
-                # except:
-                #     pass
+
                 time.sleep(2)
     except ReadTimeoutError:
         print(f"{links[a]} time out")
