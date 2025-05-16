@@ -9,7 +9,7 @@ import sys, pathlib
 import webbrowser
 
 import os, signal, threading
-
+import subprocess, platform, psutil
 """
 Automate a browser to click a link and save the resulting HTML.
 Requires: selenium ≥ 4.19, webdriver-manager ≥ 4.0, Firefox + geckodriver.
@@ -32,11 +32,10 @@ import pathlib
 from selenium.webdriver.common.keys import Keys
 
 # ──► EDIT THESE THREE LINES ONLY ◄──
-START_URL   = "https://chemistry-europe.onlinelibrary.wiley.com/doi/abs/10.1002/cctc.202500034"     # page that contains the link
 HTML_DIR = Path.cwd() / "HTML"
 HTML_DIR.mkdir(exist_ok=True)
 
-df = pd.read_csv("Wiley_merged_URL_reaction_class.csv")
+df = pd.read_csv("AAAS_merged_URL_reaction_class.csv")
 links = df['ArticleURL']
 # 1. Launch a **real** (headless) Firefox browser
 opts = Options()
@@ -78,19 +77,54 @@ dwnld_opt.set_preference("browser.download.manager.quitBehavior", 2)
 dwnld_opt.set_preference("pdfjs.disabled", True)                # :contentReference[oaicite:1]{index=1}
 # ─────────────────────────────────────────────────────────────────────driver = webdriver.Firefox(options=opts)
 
-TIMEOUT     = 5            # seconds before we force-kill
+TIMEOUT     = 20            # seconds before we force-kill
 # ── shared state between the two threads ────────────────────────────
 done_event  = threading.Event()          # signals success
 pid_holder  = {"pid": None}              # filled by worker thread
 # ─────────────────────────────────────────────────────────────────────
 
+def kill_process_tree(root_pid: int, grace: float = 2.0):
+    """
+    Terminate *root_pid* and all children.
+    Works on Linux/macOS/WSL and Windows.
+    """
+    try:
+        parent = psutil.Process(root_pid)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return
+
+    # 1️⃣ try graceful SIGTERM / .terminate() first
+    children = parent.children(recursive=True)
+    for p in children:
+        try:
+            p.terminate()
+        except psutil.NoSuchProcess:
+            pass
+    parent.terminate()
+
+    gone, alive = psutil.wait_procs([parent, *children], timeout=grace)
+
+    # 2️⃣ force-kill anything that ignored terminate()
+    for p in alive:
+        try:
+            p.kill()
+        except psutil.NoSuchProcess:
+            pass
+
+    # extra belt-and-suspenders for Windows if something survived
+    if alive and platform.system() == "Windows":
+        subprocess.run(
+            ["taskkill", "/PID", str(root_pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
 def watchdog():
-    """Kill GeckoDriver (and thus Firefox) if the download isn't done in time."""
-    if not done_event.wait(TIMEOUT):
-        pid = pid_holder["pid"]
-        if pid:
-            print(f"✗ download exceeded {TIMEOUT}s → killing PID {pid}")
-            os.kill(pid, 9)
+    if done_event.wait(TIMEOUT):
+        return                       # download finished in time
+    pid = pid_holder["gecko"]
+    if pid:
+        print(f"✗ download exceeded {TIMEOUT}s → killing tree rooted at {pid}")
+        kill_process_tree(pid)
 
 def download_worker(dwnld_opt, DOWNLOAD_DIR):
     start = time.time()
@@ -100,15 +134,18 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR):
         dwnld_opt.page_load_strategy = "eager"
         dwnld_opt.add_argument("--headless")  
         new_driver = webdriver.Firefox(options = dwnld_opt)
-        pid_holder["pid"] = new_driver.service.process.pid
-        new_driver.set_page_load_timeout(5)   # 15-second cap
+        pid_holder["gecko"]   = new_driver.service.process.pid
+        pid_holder["firefox"] = new_driver.capabilities.get("moz:processID")  # FYI
+        new_driver.set_page_load_timeout(15)   # 15-second cap
         new_driver.get(link)
         
+        new_driver.quit()
     except TimeoutException:
         print("DONEEE!!!!")
     except:
         with open("errors.log", "a", encoding="utf-8") as log:
             log.write(f"CANNOT PROCESS LINK {link} for paper {a}, {links[a]}\n")
+            new_driver.quit()
     finally:
         try:
             new_driver.quit()
@@ -117,7 +154,7 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR):
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(100, 101):
+for a in range(309, 1000):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -148,6 +185,7 @@ for a in range(100, 101):
         driver.quit()
         for link in page_links:
             if _looks_like_download(link) and "RecruitmentKit" not in link:
+                pid_holder  = {"pid": None}              # filled by worker thread
                 #driver.get(link)
                 print(link)
                 DOWNLOAD_DIR = Path.cwd() / "downloads" / str(a)
@@ -163,12 +201,19 @@ for a in range(100, 101):
                 
                 t_worker.join()
                 t_watchdog.join()
-
+                # try:
+                #     new_driver.quit()
+                # finally:
+                #     pass
+                # try:
+                #     os.kill(pid_holder['pid'], 9)
+                # except:
+                #     pass
                 time.sleep(2)
     except ReadTimeoutError:
-        print(f"{links[a]} time out\n")
+        print(f"{links[a]} time out")
         driver.quit()
     finally:
         print("DPONE")
-        #driver.quit()
+        driver.quit()
         time.sleep(12)
