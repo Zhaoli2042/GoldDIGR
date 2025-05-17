@@ -55,12 +55,16 @@ dwnld_opt.set_preference("browser.download.manager.showWhenStarting", False)
 # ① Tell Firefox which MIME types to save silently
 #    For plain pages add both HTML flavours; add others as needed.
 mime_types = ",".join([
+    "text/plain",                # ← add this for .txt
+    "text/xml",
+    "text/csv",
+    "text/xml",
     "text/html",
     "application/xhtml+xml",
     "application/octet-stream"               # catch-all fallback
 ])
 dwnld_opt.set_preference("browser.helperApps.neverAsk.saveToDisk", mime_types)
-#dwnld_opt.set_preference("browser.helperApps.neverAsk.openFile",  mime_types)
+dwnld_opt.set_preference("browser.helperApps.neverAsk.openFile",  mime_types)
 
 # ② Disable all internal viewers so they don’t steal the download
 dwnld_opt.set_preference("browser.download.viewableInternally.enabledTypes", "")
@@ -81,6 +85,9 @@ TIMEOUT     = 20            # seconds before we force-kill
 # ── shared state between the two threads ────────────────────────────
 done_event  = threading.Event()          # signals success
 pid_holder  = {"pid": None}              # filled by worker thread
+# ─────────────────────────────────────────────────────────────────────
+# these files will probably be opened in the browser, save them
+txt_formats = ['.txt', '.csv', '.xml', '.html']
 # ─────────────────────────────────────────────────────────────────────
 
 def kill_process_tree(root_pid: int, grace: float = 2.0):
@@ -139,22 +146,31 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR, link):
         new_driver.set_page_load_timeout(15)   # 15-second cap
         new_driver.get(link)
         
-        new_driver.quit()
+        #new_driver.quit()
     except TimeoutException:
         print("DONEEE!!!!")
     except:
-            new_driver.quit()
+        pass
+            #new_driver.quit()
     finally:
         try:
             with open(str(DOWNLOAD_DIR) + "/links.log", "a", encoding="utf-8") as log:
                 log.write(f"{link}\n")
+            if(Path(link).suffix in txt_formats):
+                output = DOWNLOAD_DIR / f"{Path(link).stem}{Path(link).suffix}"
+                html = new_driver.page_source
+                #print(html)
+                if html and not output.is_file(): 
+                    pathlib.Path(output).write_text(html, encoding="utf-8")
+                    print(f"Saved opened file to {output}")
             new_driver.quit()
         except:
             pass
+            new_driver.quit()
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(4, 100):
+for a in range(502, 1000):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -185,13 +201,15 @@ for a in range(4, 100):
         driver.quit()
         for link in page_links:
             if _looks_like_download(link) and "RecruitmentKit" not in link:
-                pid_holder  = {"pid": None}              # filled by worker thread
-                # set cookie = 0 if the link is pdf
-                # only works on laptop
-                #driver.get(link)
+                
                 print(link)
                 DOWNLOAD_DIR = Path.cwd() / "downloads" / str(a)
                 DOWNLOAD_DIR.mkdir(exist_ok=True)
+                actual_file = DOWNLOAD_DIR / f"{Path(link).stem}{Path(link).suffix}"
+                if actual_file.is_file(): continue
+            
+                pid_holder  = {"pid": None}              # filled by worker thread
+
                 # ── run the two threads ─────────────────────────────────────────────
                 t_worker   = threading.Thread(target=download_worker, 
                                               args=(dwnld_opt, 
@@ -205,49 +223,49 @@ for a in range(4, 100):
                 t_watchdog.join()
                 
                 time.sleep(2)
-                if (".pdf" in link):
-                    pdf_file = DOWNLOAD_DIR / f"{Path(link).stem}.pdf"
+                # TRY DIFFERENT COOKIE OPTIONS, if DOWNLOAD DOES NOT WORK
+
+                #actual_file = DOWNLOAD_DIR / f"{Path(link).stem}{Path(link).suffix}"
+                if actual_file.is_file(): continue                
                 
-                    if pdf_file.is_file(): continue
+                t_worker   = threading.Thread(target=download_worker, 
+                                              args=(dwnld_opt, 
+                                                    DOWNLOAD_DIR, link+"?cookitSet=0"), daemon=True)
+                t_watchdog = threading.Thread(target=watchdog, 
+                                              daemon=True)
+                t_worker.start()
+                t_watchdog.start()
                 
-                    t_worker   = threading.Thread(target=download_worker, 
-                                                  args=(dwnld_opt, 
-                                                        DOWNLOAD_DIR, link+"?cookitSet=0"), daemon=True)
-                    t_watchdog = threading.Thread(target=watchdog, 
-                                                  daemon=True)
-                    t_worker.start()
-                    t_watchdog.start()
-                    
-                    t_worker.join()
-                    t_watchdog.join()
-                    
-                    if pdf_file.is_file(): continue
-                    time.sleep(2)
-                    t_worker   = threading.Thread(target=download_worker, 
-                                                  args=(dwnld_opt, 
-                                                        DOWNLOAD_DIR, link+"?cookitSet=1"), daemon=True)
-                    t_watchdog = threading.Thread(target=watchdog, 
-                                                  daemon=True)
-                    t_worker.start()
-                    t_watchdog.start()
-                    
-                    t_worker.join()
-                    t_watchdog.join()
-                    
-                    if pdf_file.is_file(): continue
-                    time.sleep(2)
-                    t_worker   = threading.Thread(target=download_worker, 
-                                                  args=(dwnld_opt, 
-                                                        DOWNLOAD_DIR, link+"?cookitSet=2"), daemon=True)
-                    t_watchdog = threading.Thread(target=watchdog, 
-                                                  daemon=True)
-                    t_worker.start()
-                    t_watchdog.start()
-                    
-                    t_worker.join()
-                    t_watchdog.join()
-                    
-                    if pdf_file.is_file(): continue
+                t_worker.join()
+                t_watchdog.join()
+                
+                if actual_file.is_file(): continue
+                time.sleep(2)
+                t_worker   = threading.Thread(target=download_worker, 
+                                              args=(dwnld_opt, 
+                                                    DOWNLOAD_DIR, link+"?cookitSet=1"), daemon=True)
+                t_watchdog = threading.Thread(target=watchdog, 
+                                              daemon=True)
+                t_worker.start()
+                t_watchdog.start()
+                
+                t_worker.join()
+                t_watchdog.join()
+                
+                if actual_file.is_file(): continue
+                time.sleep(2)
+                t_worker   = threading.Thread(target=download_worker, 
+                                              args=(dwnld_opt, 
+                                                    DOWNLOAD_DIR, link+"?cookitSet=2"), daemon=True)
+                t_watchdog = threading.Thread(target=watchdog, 
+                                              daemon=True)
+                t_worker.start()
+                t_watchdog.start()
+                
+                t_worker.join()
+                t_watchdog.join()
+                
+                if actual_file.is_file(): continue
                     
     except ReadTimeoutError:
         print(f"{links[a]} time out")
