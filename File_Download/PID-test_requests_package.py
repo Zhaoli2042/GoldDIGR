@@ -132,7 +132,7 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR, link):
         dwnld_opt.set_preference("browser.download.dir", 
                                  str(DOWNLOAD_DIR))
         dwnld_opt.page_load_strategy = "eager"
-        dwnld_opt.add_argument("--headless")  
+        #dwnld_opt.add_argument("--headless")  
         new_driver = webdriver.Firefox(options = dwnld_opt)
         pid_holder["gecko"]   = new_driver.service.process.pid
         pid_holder["firefox"] = new_driver.capabilities.get("moz:processID")  # FYI
@@ -154,7 +154,7 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR, link):
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(2051, 2100):
+for a in range(4, 100):
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -187,7 +187,6 @@ for a in range(2051, 2100):
             if _looks_like_download(link) and "RecruitmentKit" not in link:
                 pid_holder  = {"pid": None}              # filled by worker thread
                 # set cookie = 0 if the link is pdf
-                if (".pdf" in link): link += "?cookieSet=0" # seems only works with ACS
                 # only works on laptop
                 #driver.get(link)
                 print(link)
@@ -204,8 +203,52 @@ for a in range(2051, 2100):
                 
                 t_worker.join()
                 t_watchdog.join()
-
+                
                 time.sleep(2)
+                if (".pdf" in link):
+                    pdf_file = DOWNLOAD_DIR / f"{Path(link).stem}.pdf"
+                
+                    if pdf_file.is_file(): continue
+                
+                    t_worker   = threading.Thread(target=download_worker, 
+                                                  args=(dwnld_opt, 
+                                                        DOWNLOAD_DIR, link+"?cookitSet=0"), daemon=True)
+                    t_watchdog = threading.Thread(target=watchdog, 
+                                                  daemon=True)
+                    t_worker.start()
+                    t_watchdog.start()
+                    
+                    t_worker.join()
+                    t_watchdog.join()
+                    
+                    if pdf_file.is_file(): continue
+                    time.sleep(2)
+                    t_worker   = threading.Thread(target=download_worker, 
+                                                  args=(dwnld_opt, 
+                                                        DOWNLOAD_DIR, link+"?cookitSet=1"), daemon=True)
+                    t_watchdog = threading.Thread(target=watchdog, 
+                                                  daemon=True)
+                    t_worker.start()
+                    t_watchdog.start()
+                    
+                    t_worker.join()
+                    t_watchdog.join()
+                    
+                    if pdf_file.is_file(): continue
+                    time.sleep(2)
+                    t_worker   = threading.Thread(target=download_worker, 
+                                                  args=(dwnld_opt, 
+                                                        DOWNLOAD_DIR, link+"?cookitSet=2"), daemon=True)
+                    t_watchdog = threading.Thread(target=watchdog, 
+                                                  daemon=True)
+                    t_worker.start()
+                    t_watchdog.start()
+                    
+                    t_worker.join()
+                    t_watchdog.join()
+                    
+                    if pdf_file.is_file(): continue
+                    
     except ReadTimeoutError:
         print(f"{links[a]} time out")
         driver.quit()
