@@ -28,7 +28,7 @@ jobs:
           python Gather-PoP-links.py RSC
           python Gather-PoP-links.py ACS
           python Gather-PoP-links.py AAAS
-
+          python Gather-PoP-links.py CellPress
       - name: Commit merged CSVs
         run: |
           git config --global user.name "github-actions[bot]"
