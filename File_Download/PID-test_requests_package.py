@@ -177,23 +177,24 @@ for a in range(502, 1000):
             #executable_path=GeckoDriverManager().install(),
             options=opts,
         )
-        # 2. Open the starting page
-        driver.get(links[a])
-    
-        # 3. Click the desired link when it becomes clickable
-        #WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.LINK_TEXT, LINK_TEXT))).click()
-    
-        # 4. Wait until the new page has finished loading
-        WebDriverWait(driver, 15).until(
-            lambda d: d.execute_script("return document.readyState") == "complete"
-        )
-    
-        # 5. Grab the browser’s DOM snapshot (fully rendered HTML)
-        html = driver.page_source
-    
-        # 6. Save it to disk
-        pathlib.Path(OUTPUT_FILE).write_text(html, encoding="utf-8")
-        print(f"Saved HTML to {OUTPUT_FILE}")
+        if not Path(OUTPUT_FILE).is_file():
+            # 2. Open the starting page
+            driver.get(links[a])
+        
+            # 3. Click the desired link when it becomes clickable
+            #WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.LINK_TEXT, LINK_TEXT))).click()
+        
+            # 4. Wait until the new page has finished loading
+            WebDriverWait(driver, 15).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+        
+            # 5. Grab the browser’s DOM snapshot (fully rendered HTML)
+            html = driver.page_source
+        
+            # 6. Save it to disk
+            pathlib.Path(OUTPUT_FILE).write_text(html, encoding="utf-8")
+            print(f"Saved HTML to {OUTPUT_FILE}")
         
         page_links = extract_links_from_file(f"{OUTPUT_FILE}", 
                                              base_url = links[0])
