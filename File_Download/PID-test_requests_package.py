@@ -170,7 +170,22 @@ def download_worker(dwnld_opt, DOWNLOAD_DIR, link):
     end = time.time()
     print(f"TOOK {end-start} secs\n")
 
-for a in range(502, 1000):
+def check_file_and_size(actual_file):
+    val = False
+    # if file exists, check if file size is 0 byte
+    # if the file is 0 byte, remove it
+    if actual_file.is_file() and actual_file.stat().st_size == 0:
+        actual_file.unlink() # permanently removes the file
+        print(f"Deleted empty file: {actual_file}")
+    if actual_file.is_file(): val = True
+    return val
+
+notdone_list = [1051,1109,122,1592,1653,1693,1868,1936,1942,2002,2166,2171,2216,224,2241,2263,2549,2596,2660,2757,2808,2840,2964,3029,3037,3044,3203,3216,3229,3230,3246,3285,355,3697,3740,391,4103,4200,4380,4386,4601,495,5045,5077,5105,5259,5272,5441,5544,5564,5587,5745,5806,5812,6159,6417,6485,6493,6506,6613,6616,6701,6739,6906,7423,7425,7575,7691,7902,7959,799,8080,8083,8090,8099,8206,8579,8673,878,8787,8809,8831,8841,9543,966,990]
+for a in notdone_list: #range(0, 2043):
+    # modification for CellPress
+    # only process open-access (fulltext) links
+    #if not "fulltext" in links[a]: continue
+    
     OUTPUT_FILE = f"{HTML_DIR}/{a}.html"        # where to save the HTML
     try:
         driver = webdriver.Firefox(
@@ -207,7 +222,7 @@ for a in range(502, 1000):
                 DOWNLOAD_DIR = Path.cwd() / "downloads" / str(a)
                 DOWNLOAD_DIR.mkdir(exist_ok=True)
                 actual_file = DOWNLOAD_DIR / f"{Path(link).stem}{Path(link).suffix}"
-                if actual_file.is_file(): continue
+                if check_file_and_size(actual_file): continue
             
                 pid_holder  = {"pid": None}              # filled by worker thread
 
@@ -227,7 +242,7 @@ for a in range(502, 1000):
                 # TRY DIFFERENT COOKIE OPTIONS, if DOWNLOAD DOES NOT WORK
 
                 #actual_file = DOWNLOAD_DIR / f"{Path(link).stem}{Path(link).suffix}"
-                if actual_file.is_file(): continue                
+                if check_file_and_size(actual_file): continue           
                 
                 t_worker   = threading.Thread(target=download_worker, 
                                               args=(dwnld_opt, 
@@ -240,7 +255,7 @@ for a in range(502, 1000):
                 t_worker.join()
                 t_watchdog.join()
                 
-                if actual_file.is_file(): continue
+                if check_file_and_size(actual_file): continue
                 time.sleep(2)
                 t_worker   = threading.Thread(target=download_worker, 
                                               args=(dwnld_opt, 
@@ -253,7 +268,7 @@ for a in range(502, 1000):
                 t_worker.join()
                 t_watchdog.join()
                 
-                if actual_file.is_file(): continue
+                if check_file_and_size(actual_file): continue
                 time.sleep(2)
                 t_worker   = threading.Thread(target=download_worker, 
                                               args=(dwnld_opt, 
