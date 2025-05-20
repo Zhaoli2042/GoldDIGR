@@ -3,19 +3,35 @@ import glob
 import os
 import sys
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 1.  tiny helper – keep only the part before “?”
+# ──────────────────────────────────────────────────────────────────────────────
+def normalize_url(url: str) -> str:
+    """Return *url* without the query string (everything after '?')."""
+    if not isinstance(url, str):
+        return url
+    return url.split("?", 1)[0].strip()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2.  save-or-append utility
+# ──────────────────────────────────────────────────────────────────────────────
 def save_with_new_entries(df: pd.DataFrame, output_filename: str) -> None:
     """Write *df* to *output_filename*.
 
-    If *output_filename* already exists, compare the *ArticleURL* column and
-    write only the brand‑new rows (those whose ArticleURL is **not** present in
-    the existing file) into **new-*output_filename*** instead of touching the
-    original file.
+    • If *output_filename* already exists, append only those rows whose
+      **normalized** ArticleURL is brand-new; they go to **new-<output>**.
     """
-    if os.path.exists(output_filename):
-        print(f"[INFO] Existing file '{output_filename}' detected – checking for new links…")
-        existing_df = pd.read_csv(output_filename)
-        new_rows = df[~df["ArticleURL"].isin(existing_df["ArticleURL"])]
+    # Always work on a copy so we never mutate the caller’s DataFrame.
+    df = df.copy()
+    df["ArticleURL"] = df["ArticleURL"].map(normalize_url)
 
+    if os.path.exists(output_filename):
+        print(f"[INFO] Existing '{output_filename}' detected – checking for new links…")
+        existing_df = pd.read_csv(output_filename)
+        existing_df["ArticleURL"] = existing_df["ArticleURL"].map(normalize_url)
+
+        new_rows = df[~df["ArticleURL"].isin(existing_df["ArticleURL"])]
         if new_rows.empty:
             print("[INFO] No new ArticleURL entries found – nothing to write.")
             return
