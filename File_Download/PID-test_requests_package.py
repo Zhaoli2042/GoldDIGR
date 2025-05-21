@@ -288,4 +288,4 @@ for a in range(9000, 10000):
     finally:
         print("DPONE")
         driver.quit()
-        time.sleep(12)
+        time.sleep(30)
