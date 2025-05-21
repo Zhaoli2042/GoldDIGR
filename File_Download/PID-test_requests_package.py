@@ -35,7 +35,7 @@ from selenium.webdriver.common.keys import Keys
 HTML_DIR = Path.cwd() / "HTML"
 HTML_DIR.mkdir(exist_ok=True)
 
-df = pd.read_csv("ACS_merged_URL_reaction_class.csv")
+df = pd.read_csv("new-ACS_merged_URL_reaction_class.csv")
 links = df['ArticleURL']
 # 1. Launch a **real** (headless) Firefox browser
 opts = Options()
@@ -180,8 +180,7 @@ def check_file_and_size(actual_file):
     if actual_file.is_file(): val = True
     return val
 
-notdone_list = [1051,1109,122,1592,1653,1693,1868,1936,1942,2002,2166,2171,2216,224,2241,2263,2549,2596,2660,2757,2808,2840,2964,3029,3037,3044,3203,3216,3229,3230,3246,3285,355,3697,3740,391,4103,4200,4380,4386,4601,495,5045,5077,5105,5259,5272,5441,5544,5564,5587,5745,5806,5812,6159,6417,6485,6493,6506,6613,6616,6701,6739,6906,7423,7425,7575,7691,7902,7959,799,8080,8083,8090,8099,8206,8579,8673,878,8787,8809,8831,8841,9543,966,990]
-for a in notdone_list: #range(0, 2043):
+for a in range(9000, 10000):
     # modification for CellPress
     # only process open-access (fulltext) links
     #if not "fulltext" in links[a]: continue
