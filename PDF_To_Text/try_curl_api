@@ -2,5 +2,5 @@ curl -X 'POST' \
   'http://localhost:8080/api/v1/convert/pdf/text' \
   -H 'accept: */*' \
   -H 'Content-Type: multipart/form-data' \
-  -F 'fileInput=@PDF//rsc_13_infographic_landscape.pdf;type=application/pdf' \
+  -F 'fileInput=@downloads/9999//Raw-PDF/om9006278_si_004.pdf;type=application/pdf' \
   -F 'outputFormat=txt'

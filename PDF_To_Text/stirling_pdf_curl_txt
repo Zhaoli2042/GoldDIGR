@@ -1,12 +1,26 @@
 #!/bin/bash
+Home_Dir=$(pwd)
+echo $Home_Dir
+for d in downloads/*/; do
+  echo "Processing $d"
+  if [ ! -d $d/"Raw-PDF"/ ] ; then
+    continue
+  fi
+  if [ -d $d/"Converted-PDF-To-TXT"/ ] ; then
+    continue
+  fi
 
-PDF_Dir=PDF/
+  PDF_Dir=$d/Raw-PDF
+  Dest_Dir=$d/"Converted-PDF-To-TXT"
 
-for f in $PDF_Dir/*.pdf; do
-  name=${f%.pdf*}
-  cp try_curl_api_template try_curl_api
-  sed -i 's|NAME|'$name'|g' try_curl_api
-  short_name="${name#*$PDF_Dir}"
-  ./try_curl_api > PDF-To-Text/$short_name.txt
-  echo "$name DONE!"
+  for f in $PDF_Dir/*.pdf; do
+    name=${f%.pdf*}
+    echo $name
+    cp try_curl_api_template try_curl_api
+    sed -i 's|NAME|'$name'|g' try_curl_api
+    short_name="${name#*$PDF_Dir/}"
+    echo $short_name
+    if [ ! -d $Dest_Dir ] ; then mkdir $Dest_Dir; fi
+    ./try_curl_api > $Dest_Dir/$short_name.txt
+  done
 done
