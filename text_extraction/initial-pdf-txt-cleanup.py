@@ -112,59 +112,88 @@ import periodictable as pt   # pip install periodictable
 # Pre-compute a fast-lookup set of valid element symbols (H, He, Li, …)
 VALID_SYMBOLS = {el.symbol for el in pt.elements if el.number > 0}
 
+# Simple helper: does a token look like a float with ≥ 2 digits after the dot?
+def _is_xyz_float(tok: str) -> bool:
+    if tok.count('.') != 1:                     # must contain exactly one '.'
+        return False
+    whole, frac = tok.lstrip('+-').split('.', 1)
+    return frac.isdigit() and len(frac) >= 2 and (whole.isdigit() or whole == '')
+
 def is_xyz_line(line: str) -> bool:
     """
-    Return True if *line* looks like a single XYZ-coordinate entry.
+    Return True if *line* looks like a valid XYZ-coordinate entry.
     
-    Accepted line format
-    --------------------
-    [ElementLabel]  x  y  z   (whitespace-separated)
-    
-    • ElementLabel:   1–3 letters, optionally followed by digits
-                      – Letters must form a valid element symbol (H, He, Li, …).
-    • Exactly three floating-point numbers with ≥ 2 digits after the decimal.
-    • ≤ 4 total letters in the line (typical of element labels).
-    • No forbidden characters: = % ( ) ! @ °
+    Rules (all must pass):
+    1. No forbidden symbols (= % ( ) ! @ °).
+    2. Exactly three floats appear in the line, each with ≥ 2 decimal digits.
+    3. Those three floats are the **last three tokens**; nothing follows them.
+    4. ≤ 4 alphabetic characters total in the line.
+    5. The first token that contains letters starts with a valid element symbol.
     """
-    # 1. Quick symbol blacklist
-    if any(sym in line for sym in ["=", "%", "(", ")", "!", "@", "°"]):
+    # --- NEW EN-DASH HANDLING ---------------------------------------------
+    # Treat the Unicode en-dash (U+2013) exactly like ASCII minus.
+    line = line.replace("–", "-")
+    # -----------------------------------------------------------------------
+    
+    # 0. Reject any other non-ASCII characters
+    if any(ord(ch) > 127 for ch in line):
+        return False
+    
+    # 1. Forbidden symbols
+    if any(sym in line for sym in ("=", "%", "(", ")", "!", "@", "°")):
         return False
 
-    # 2. Extract all float substrings (sign, digits, '.', fraction)
-    floats = re.findall(r'[-+]?\d*\.\d+', line)
-    if len(floats) != 3:
-        return False
-    if any(len(f.split('.')[1]) < 2 for f in floats):           # < 2 digits after '.'
+    tokens = line.strip().split()
+    if len(tokens) < 4:                         # need at least: element + 3 coords
         return False
 
-    # 3. Letter count guard
+    # ------------------------------------------------------------
+    # 2–3.  The final three tokens must be valid XYZ coordinates.
+    #       Treat bare 0 (+0 / -0) as “0.0000” or a tiny float 
+    #       so it counts as a
+    #       proper float with ≥ 2 fractional digits.
+    # ------------------------------------------------------------
+    for i in range(-3, 0):                              # last three indices
+        tok = tokens[i]
+        if tok in {"0", "+0", "-0"}:
+            sign = tok[0] if tok[0] in "+-" else ""
+            tokens[i] = f"{sign}0.0000000001"             # e.g. -0 → -0.0000
+
+    # Re-assemble the corrected line and make this the working string
+    line = " ".join(tokens)
+    tokens = line.strip().split() # alias for clarity
+
+    # each of the rewritten tail tokens must look like an XYZ float
+    if not all(_is_xyz_float(t) for t in tokens[-3:]):
+        return False
+    
+    # Count ALL floats in the line with a permissive regex (sign? digits? . digits+)
+    float_strings = re.findall(r'[-+]?\d*\.\d+', line)
+    # Must be exactly the same three floats we just validated
+    if len(float_strings) != 3:
+        return False
+
+    # 4. Total letters guard (matches earlier behaviour)
     if len(re.findall(r'[A-Za-z]', line)) > 4:
         return False
 
-    # 4. Validate the element label  (no regex)
-    for token in line.split():
-        # Skip tokens with no letters at all
-        if not any(ch.isalpha() for ch in token):
-            continue
-
-        # Extract the first contiguous block of letters (stop at first non-letter)
-        letters = []
-        for ch in token:
-            if ch.isalpha():
-                letters.append(ch)
-            else:
-                break                                    # stop once a non-letter appears
-
-        if not letters:                                 # should never happen
-            return False
-
-        symbol = ''.join(letters).capitalize()          # normalize “pd” → “Pd”
-        if symbol not in VALID_SYMBOLS:                 # look up in periodic table
-            return False
-        break                                           # a valid element label found
-    else:
-        # No token contained letters ⇒ not an XYZ line
-        return False
+    # # 5. Validate element label (no regex)
+    # for tok in tokens:
+    #     if not any(ch.isalpha() for ch in tok):
+    #         continue
+    #     # take the leading consecutive letters (e.g. 'Pd' in 'Pd1')
+    #     letters = []
+    #     for ch in tok:
+    #         if ch.isalpha():
+    #             letters.append(ch)
+    #         else:
+    #             break
+    #     symbol = ''.join(letters).capitalize()
+    #     if symbol not in VALID_SYMBOLS:
+    #         return False
+    #     break
+    # else:
+    #     return False  # no token with letters at all
 
     return True
 
