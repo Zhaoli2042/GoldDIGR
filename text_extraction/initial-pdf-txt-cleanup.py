@@ -9,6 +9,9 @@ import os
 
 # Define the possible regex patterns for footers/page numbers.
 # Each pattern looks for the specified keyword optionally followed by whitespace and one or more digits.
+
+homedir=os.getcwd()
+
 patterns = {
     "Page": r'Page\s*\d+',
     "page": r'page\s*\d+',
@@ -21,9 +24,6 @@ patterns = {
     "s-": r's-\s*\d+',
     "s": r's\s*\d+'
 }
-
-departure_folder = '.'
-destination_folder = '.'
 
 # --- Footer Pattern Detection ---
 # Process a sample text or the full text to count occurrences for each footer pattern.
@@ -56,57 +56,31 @@ def detect_footer_pattern(text):
         return most_probable[0]
     else:
         return None
-'''
-def is_xyz_line(line):
-    """
-    Returns True if the line matches the pattern for an xyz coordinate line,
-    which we define as an element symbol followed by three floating point numbers.
-    """
-    # The regex matches a line that starts with an element symbol (one or two letters)
-    # followed by three floats (allowing for negative numbers and decimals)
-    pattern = r"^\s*[A-Za-z]{1,2}\s+[-+]?\d*\.\d+\s+[-+]?\d*\.\d+\s+[-+]?\d*\.\d+\s*$"
-    return re.match(pattern, line) is not None
 
-def has_at_least_three_floats(line):
+# ── Helper: split a line by whichever delimiter yields the most tokens ──
+def _smart_split(raw: str):
     """
-    Checks if the line contains at least three floats.
+    Return a list of tokens obtained with the “dominant” delimiter.
+
+    Candidates: comma, semicolon, tab, pipe.
+    The delimiter that produces the most fields wins.
+    If none of those add more fields than plain-whitespace splitting,
+    fall back to whitespace splitting.
     """
-    floats = re.findall(r'[-+]?\d*\.\d+', line)
-    return len(floats) >= 3
+    raw = raw.rstrip("\n\r")
+    # Start with whitespace split as the default
+    best_parts = raw.split()
+    best_count = len(best_parts)
 
+    for sep in [",", ";", "\t", "|"]:
+        if sep in raw:
+            parts = [field.strip() for field in raw.split(sep)]
+            if len(parts) > best_count:
+                best_parts, best_count = parts, len(parts)
 
-def is_xyz_line(line):
-    """
-    Returns True if the line qualifies as an xyz coordinate line.
-    
-    Criteria:
-      - The line must contain at least 3 and no more than 3 floats (numbers with a decimal point).
-      - The line must contain no more than 30 letters (alphabetic characters).
-      - The line must not contain any forbidden symbols: "=", "%", "(", ")", "!", "@", "°".
-    """
-    # Check for forbidden symbols.
-    forbidden_symbols = ["=", "%", "(", ")", "!", "@", "°"]
-    if any(symbol in line for symbol in forbidden_symbols):
-        return False
-    
-    floats = re.findall(r'[-+]?\d*\.\d+', line)
-    count = len(floats)
-    if count < 3 or count > 3:
-        return False
-    
-    # Count letters in the line.
-    letters = re.findall(r'[A-Za-z]', line)
-    if len(letters) > 4:
-        return False
+    # Remove empty strings that can appear with consecutive delimiters
+    return [p for p in best_parts if p]
 
-    # If there are exactly 3 floats, ensure there is something else (letter or integer).
-    # Check for integers (numbers without a decimal point).
-    integers = re.findall(r'(?<!\.)\b\d+\b(?!\.)', line)
-    if len(floats) == 3 and not (letters or integers):
-        return False
-
-    return True
-'''
 import periodictable as pt   # pip install periodictable
 
 # Pre-compute a fast-lookup set of valid element symbols (H, He, Li, …)
@@ -143,7 +117,10 @@ def is_xyz_line(line: str) -> bool:
     if any(sym in line for sym in ("=", "%", "(", ")", "!", "@", "°")):
         return False
 
-    tokens = line.strip().split()
+    # not if you are interested in POSCAR format (VASP related)
+    # POSCAR will have only three floats
+    #tokens = line.strip().split()
+    tokens = _smart_split(line)
     if len(tokens) < 4:                         # need at least: element + 3 coords
         return False
 
@@ -152,6 +129,8 @@ def is_xyz_line(line: str) -> bool:
     #       Treat bare 0 (+0 / -0) as “0.0000” or a tiny float 
     #       so it counts as a
     #       proper float with ≥ 2 fractional digits.
+    #       using a tiny float instead of adding trailing zeros 
+    #       will pass _is_xyz_float() check
     # ------------------------------------------------------------
     for i in range(-3, 0):                              # last three indices
         tok = tokens[i]
@@ -196,6 +175,52 @@ def is_xyz_line(line: str) -> bool:
     #     return False  # no token with letters at all
 
     return True
+
+# if a file has no "xyz line", this will find some indicators
+from collections import OrderedDict
+def contains_xyz_indicators(text: str):
+    """
+    Heuristic scan for tell-tale keywords that hint at Cartesian
+    coordinates or XYZ blocks—even when no single line passes the
+    strict `is_xyz_line()` test.
+
+    Parameters
+    ----------
+    text : str
+        The entire text content of a file.
+
+    Returns
+    -------
+    tuple[bool, list[str]]
+        (any_found, indicators_found)
+
+        * any_found         – True if ≥ 1 indicator is present.
+        * indicators_found  – List of human-readable indicator names
+                              (e.g. ['coordinate', 'X Y Z']).
+
+    Indicators searched (case-insensitive)
+    --------------------------------------
+    1. 'coordinate'          – exact word
+    2. 'XYZ'                 – the acronym
+    3. 'X Y Z'               – the letters X, Y, Z separated by spaces or tabs
+    4. 'geometry'            – singular
+    5. 'geometries'          – plural
+    """
+    patterns = OrderedDict([
+        ('coordinate',   r'\bcoordinate\b'),
+        ('XYZ',          r'\bxyz\b'),
+        ('X Y Z',        r'\bx[ \t]+y[ \t]+z\b'),
+        ('geometry',     r'\bgeometry\b'),
+        ('geometries',   r'\bgeometries\b'),
+    ])
+
+    found = []
+
+    for name, pat in patterns.items():
+        if re.search(pat, text, re.IGNORECASE):
+            found.append(name)
+
+    return bool(found), found
 
 def is_header_or_footer(line, footer_pattern):
     """
@@ -339,7 +364,8 @@ def contains_ts_pattern(text):
         bool: True if a TS-related term is found, False otherwise.
     """
     # Match "TS" as a whole word, or any phrase with "transition" or "transition state"
-    pattern = r'\bts\b|\btransition(?: state)?\b|‡'
+    pattern = r'\bts\b|\btransition\b|\b‡\b|'
+        
     return bool(re.search(pattern, text, re.IGNORECASE))
 
 # Energy indicator patterns. If a line contains any of these (case insensitive), remove it.
@@ -347,14 +373,11 @@ energy_indicators = ["a.u.", "free energy", "hartree", "scf", "gibbs", "model",
                      "zero point", "chemical potential", "dispersion correction",
                      "imaginary", "frequenc", "cm-1"]
 
-os.makedirs(destination_folder, exist_ok=True)
-txt_files = glob.glob(departure_folder + '/' + "*.txt")
-txt_files = [os.path.normpath(i) for i in txt_files]
-for filename in txt_files:
+def initial_cleanup(filename):
     real_filename = filename.split(os.sep)[-1]
     # Skip files that have already been processed
     if filename.endswith(".rm_footer.txt"):
-        continue
+        return
 
     # Read the text file converted from PDF
     with open(filename, "r", encoding="utf-8") as file:
@@ -364,7 +387,9 @@ for filename in txt_files:
     detected_pattern = detect_footer_pattern(text)
     if detected_pattern is None:
         print("No footer pattern detected. Skipping file.")
-        continue
+        with open(homedir + "/" + "PDF-No-Footer.txt", "a", encoding="utf-8") as file:
+            file.write(f"{filename}\n")
+        return
 
     print(f"Detected footer pattern: '{detected_pattern}'")
 
@@ -378,7 +403,7 @@ for filename in txt_files:
             #print(pat)
             if is_header_or_footer(line, pat):
                 found = True
-                print(line)
+                #print(line)
         if found:
             continue
             
@@ -414,8 +439,10 @@ for filename in txt_files:
         replacement = ".rm_footer.txt"
         if not contains_ts_pattern(clean_text):
             replacement = ".ts_notfound" + "rm_footer.txt"
+            with open(homedir + "/" + "PDF-No-TS.txt", "a", encoding="utf-8") as file:
+                file.write(f"{filename}\n")
         # Create a new filename by appending '.rm_footer' before the file extension.
-        new_filename = real_filename.replace(".txt", ".rm_footer.txt")
+        new_filename = real_filename.replace(".txt", replacement)
         new_filename = destination_folder + '/' + new_filename
             
         # Write the cleaned text to the new file
@@ -423,7 +450,47 @@ for filename in txt_files:
             file.write(clean_text)
         print(f"Footer/header lines removed. Clean file saved as: {new_filename}")
     else:
+        has_coords, markers = contains_xyz_indicators("\n".join(final_lines))
+        if has_coords:
+            with open(homedir + "/" + "PDF-Potential-xyz.txt", "a", encoding="utf-8") as file:
+                file.write(f"{filename} , indicators: {", ".join(markers)}\n")
         # if no xyz line found, do not write the file
         print("No xyz block (lines with at least three floats) found.")
-        
-        #
+        with open(homedir + "/" + "PDF-No-xyz.txt", "a", encoding="utf-8") as file:
+            file.write(f"{filename}\n")
+
+import random
+
+def deterministic_sample(population, k, seed=42):
+    state = random.getstate()     # save current RNG state (offset)
+    random.seed(seed)             # reset RNG to the chosen seed
+    out = random.sample(population, k)
+    random.setstate(state)        # restore original RNG state
+    return out
+
+# 10 distinct random integers between 0 (inclusive) and 99 (inclusive)
+#numbers = deterministic_sample(range(0, 10000), k=20, seed = 20)
+
+First_time = False
+if First_time: # from scratch
+    for a in range(0, 6500): #numbers:
+        print(f"Processing {a} folder")
+        departure_folder = f'downloads/{a}/Converted-PDF-To-TXT/'
+        destination_folder = f'downloads/{a}/Converted-PDF-To-TXT/'
+        if not os.path.isdir(departure_folder): continue
+    
+        os.makedirs(destination_folder, exist_ok=True)
+        txt_files = glob.glob(departure_folder + '/' + "*.txt")
+        txt_files = [os.path.normpath(i) for i in txt_files]
+        for filename in txt_files:
+            if "rm_footer" in filename: continue
+            initial_cleanup(filename)
+            
+else: # continue from an existing list of files
+    from pathlib import Path
+    with open("2nd_PDF-No-xyz.txt", "r", encoding="utf-8") as f:
+        cont_txt_files = [line.rstrip("\n") for line in f]
+    for filename in cont_txt_files:
+        if "rm_footer" in filename: continue
+        destination_folder = str(Path(filename).parent) + '/'
+        initial_cleanup(filename)
