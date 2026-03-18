@@ -1,0 +1,38 @@
+name: Merge CSVs
+
+on: [push, pull_request]
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas
+
+      - name: Run merge script
+        run: |
+          cd Searches/
+          python Gather-PoP-links.py Wiley
+          python Gather-PoP-links.py SpringerNature
+          python Gather-PoP-links.py Elsevier
+          python Gather-PoP-links.py RSC
+          python Gather-PoP-links.py ACS
+          python Gather-PoP-links.py AAAS
+          python Gather-PoP-links.py CellPress
+      - name: Commit merged CSVs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.csv
+          git commit -m "Add merged CSV outputs [auto]" || echo "No changes to commit"
+          git push
