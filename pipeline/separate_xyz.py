@@ -246,7 +246,7 @@ def extract_clean_name(raw: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════
 # Main: repack_xyz_blocks (from second_test_sep.py – improved version)
 # ═════════════════════════════════════════════════════════════════════════
-def repack_xyz_blocks(src: Path, dst: Path | None = None) -> int:
+def repack_xyz_blocks(src: Path, dst: Path | None = None, simple_names: bool = False) -> int:
     """
     Re-scan *src* for XYZ geometry blocks, ignoring any leading atom counts
     that may be wrong, and write a clean multi-block XYZ file plus
@@ -258,6 +258,9 @@ def repack_xyz_blocks(src: Path, dst: Path | None = None) -> int:
         The text file (e.g. rm_footer.txt) containing one or many geometries.
     dst : Path | None
         Output master file. Defaults to '<stem>_repacked.xyz' beside src.
+    simple_names : bool
+        If True, use simple sequential names (01.xyz, 02.xyz, ...).
+        If False, derive names from comment lines above each block.
 
     Returns
     -------
@@ -330,16 +333,19 @@ def repack_xyz_blocks(src: Path, dst: Path | None = None) -> int:
             fh.write("\n\n")
 
             # Determine individual filename
-            slug = extract_clean_name(comment)
-            if not slug:
-                slug = f"block_{idx:02d}"
+            if simple_names:
+                candidate = f"{idx:02d}"
+            else:
+                slug = extract_clean_name(comment)
+                if not slug:
+                    slug = f"block_{idx:02d}"
 
-            base_name = f"{idx:02d}_{slug}" if slug else f"{idx:02d}"
-            candidate = base_name
-            counter = 2
-            while candidate.lower() in used_names:
-                candidate = f"{base_name}_{counter}"
-                counter += 1
+                base_name = f"{idx:02d}_{slug}" if slug else f"{idx:02d}"
+                candidate = base_name
+                counter = 2
+                while candidate.lower() in used_names:
+                    candidate = f"{base_name}_{counter}"
+                    counter += 1
             used_names.add(candidate.lower())
 
             indiv_path = split_dir / f"{candidate}.xyz"

@@ -125,6 +125,10 @@ ts_detection:
   keywords: ["TS", "transition", "state", "imag"]
   extensions: [".xyz", ".mol", ".mol2"]
 
+# ── XYZ extraction options ──────────────────────────────────────────────
+xyz_extraction:
+  simple_names: true               # true: 01.xyz, 02.xyz  |  false: 01_block_name.xyz
+
 # ── LLM extraction ──────────────────────────────────────────────────────
 llm:
   provider: "${LLM_PROVIDER:-openai}"

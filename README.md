@@ -1,4 +1,4 @@
-# golddigr
+# GoldDIGR: Search, Download, Analyze Open-Source Chemistry Data
 
 <div align="center">
 
@@ -186,6 +186,32 @@ data/
 └── db/
     ├── pipeline.db               # SQLite job ledger
     └── pipeline.log              # full run log
+```
+
+## Sample Data
+
+A `sample-data/` directory is included with a complete input/output example
+from one article ([Guérard et al., *Chem. Eur. J.* 2016, 22, 12332](https://doi.org/10.1002/chem.201600922)):
+
+```
+sample-data/
+├── input/articles.csv                          # one-article CSV
+├── output/
+│   ├── xyz/10.1002/chem.201600922/…/01.xyz     # 12 extracted XYZ structures
+│   ├── biblatex/0.bib                          # BibLaTeX entry
+│   ├── comp_details/…/…_comp.json              # LLM-extracted comp-chem details
+│   ├── text/…/…_full.txt                       # raw extracted text
+│   └── figures/…/manifest.json                 # figure metadata (images removed)
+├── db/pipeline.db                              # SQLite ledger showing DONE status
+└── sample.log                                  # pipeline log
+```
+
+Use this to understand the expected output format, or as a test:
+
+```bash
+# Copy sample input and run
+cp sample-data/input/articles.csv data/input/articles.csv
+python run.py --start 0 --end 1
 ```
 
 ## Configuration

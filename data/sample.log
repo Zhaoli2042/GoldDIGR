@@ -1,0 +1,53 @@
+python run.py 
+19:35:11 │ pipeline.orchestrator     │ INFO    │ Loaded 1 new articles (range 0–1)
+19:35:11 │ pipeline.stirling_client  │ INFO    │ StirlingPDF is ready at http://localhost:8080
+19:35:11 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage PENDING
+19:35:11 │ pipeline.scraper          │ INFO    │ Auto-detected chrome profile: .config/google-chrome
+19:35:11 │ pipeline.scraper          │ INFO    │ Copied Chrome profile to temp dir: /tmp/golddigr_chrom
+19:35:14 │ pipeline.scraper          │ INFO    │ Chrome attached via CDP on port 19222 (pid 127902)
+19:35:29 │ pipeline.scraper          │ INFO    │ Saved HTML → data/downloads/html/0.html
+19:35:49 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage HTML_SCRAPED
+19:35:49 │ pipeline.orchestrator     │ INFO    │ Job 0: DOI = 10.1002/chem.201600922
+19:35:49 │ pipeline.metadata         │ INFO    │ BibLaTeX → 0.bib
+19:35:49 │ pipeline.link_extractor   │ INFO    │ Extracted 2 SI links from 0.html (out of 581 total)
+19:35:49 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage LINKS_EXTRACTED
+19:35:49 │ pipeline.scraper          │ INFO    │ Auto-detected chrome profile: .config/google-chrome
+19:35:50 │ pipeline.scraper          │ INFO    │ Copied Chrome profile to temp dir: /tmp/golddigr_chrom
+19:35:50 │ pipeline.scraper          │ INFO    │ Trying download: https://chemistry-europe.onlinelibrary.wiley.com/pb-assets/assets/vch/wechat-wiley-chem-1660202483563.pdf (strategy 1/1)
+19:35:52 │ pipeline.scraper          │ INFO    │ Chrome attached via CDP on port 19222 (pid 128684)
+19:36:08 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 1/3), waiting 5s… https://chemistry-europe.onlinelibrary.wiley.com/pb-assets/assets/vch/wechat-wiley-chem-1660202483563.pdf
+19:36:13 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 2/3), waiting 10s… https://chemistry-europe.onlinelibrary.wiley.com/pb-assets/assets/vch/wechat-wiley-chem-1660202483563.pdf
+19:36:23 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 3/3), waiting 15s… https://chemistry-europe.onlinelibrary.wiley.com/pb-assets/assets/vch/wechat-wiley-chem-1660202483563.pdf
+19:36:40 │ pipeline.scraper          │ INFO    │ Downloaded file detected: wechat-wiley-chem.pdf
+19:36:42 │ pipeline.scraper          │ INFO    │ Auto-detected chrome profile: .config/google-chrome
+19:36:42 │ pipeline.scraper          │ INFO    │ Copied Chrome profile to temp dir: /tmp/golddigr_chrome_5
+19:36:42 │ pipeline.scraper          │ INFO    │ Trying download: https://chemistry-europe.onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1002%2Fchem.201600922&file=chem201600922-sup-0001-misc_information.pdf (strategy 1/1)
+19:36:45 │ pipeline.scraper          │ INFO    │ Chrome attached via CDP on port 19222 (pid 129413)
+19:37:00 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 1/3), waiting 5s… https://chemistry-europe.onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1002%2Fchem.201600922&file=chem201600922-sup-0001-misc_information.pdf
+19:37:05 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 2/3), waiting 10s… https://chemistry-europe.onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1002%2Fchem.201600922&file=chem201600922-sup-0001-misc_information.pdf
+19:37:15 │ pipeline.scraper          │ INFO    │ Download: bot challenge (attempt 3/3), waiting 15s… https://chemistry-europe.onlinelibrary.wiley.com/action/downloadSupplement?doi=10.1002%2Fchem.201600922&file=chem201600922-sup-0001-misc_information.pdf
+19:38:04 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage FILES_DOWNLOADED
+19:38:04 │ pipeline.pdf_processor    │ INFO    │ Processing PDF: wechat-wiley-chem.pdf
+19:38:04 │ pipeline.stirling_client  │ INFO    │ Split wechat-wiley-chem.pdf → 1 pages in data/output/text/10.1002/chem.201600922/wechat-wiley-chem/pages
+19:38:04 │ pipeline.stirling_client  │ INFO    │ Extracted text from 1 pages of wechat-wiley-chem.pdf
+19:38:04 │ pipeline.pdf_processor    │ INFO    │ Saved full text → wechat-wiley-chem_full.txt (1 pages)
+19:38:04 │ pipeline.pdf_txt_processing │ INFO    │ wechat-wiley-chem: No XYZ blocks found (indicators: [])
+19:38:04 │ pipeline.figure_extractor │ INFO    │ wechat-wiley-chem.pdf: extracted 4 embedded images
+19:38:04 │ pipeline.orchestrator     │ INFO    │ Job 0: wechat-wiley-chem.pdf → 4 figures, 1 page renders
+19:38:04 │ pipeline.pdf_processor    │ INFO    │ Processing PDF: chem201600922-sup-0001-misc_information.pdf
+19:38:04 │ pipeline.stirling_client  │ INFO    │ Split chem201600922-sup-0001-misc_information.pdf → 27 pages in data/output/text/10.1002/chem.201600922/chem201600922-sup-0001-misc_information/pages
+19:38:04 │ pipeline.stirling_client  │ INFO    │ Extracted text from 27 pages of chem201600922-sup-0001-misc_information.pdf
+19:38:04 │ pipeline.pdf_processor    │ INFO    │ Saved full text → chem201600922-sup-0001-misc_information_full.txt (27 pages)
+19:38:04 │ pipeline.pdf_txt_processing │ INFO    │ Wrote cleaned text → chem201600922-sup-0001-misc_information.rm_footer.txt
+19:38:04 │ pipeline.separate_xyz     │ INFO    │ Repacked 12 XYZ blocks from chem201600922-sup-0001-misc_information.rm_footer.txt → chem201600922-sup-0001-misc_information.rm_footer_repacked.xyz
+19:38:04 │ pipeline.pdf_txt_processing │ INFO    │ chem201600922-sup-0001-misc_information: Extracted 12 XYZ blocks
+19:38:04 │ pipeline.orchestrator     │ INFO    │ Job 0: chem201600922-sup-0001-misc_information.pdf → 12 XYZ blocks
+19:38:04 │ pipeline.figure_extractor │ INFO    │ chem201600922-sup-0001-misc_information.pdf: extracted 14 embedded images
+19:38:06 │ pipeline.orchestrator     │ INFO    │ Job 0: chem201600922-sup-0001-misc_information.pdf → 14 figures, 27 page renders
+19:38:06 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage PDF_PROCESSED
+19:38:06 │ pipeline.orchestrator     │ INFO    │ CC content detected in data/output/text/10.1002/chem.201600922/chem201600922-sup-0001-misc_information/chem201600922-sup-0001-misc_information_full.txt
+19:38:09 │ httpx                     │ INFO    │ HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+19:38:09 │ pipeline.orchestrator     │ INFO    │ Job 0: collected 13 XYZ files → data/output/xyz/10.1002/chem.201600922
+19:38:09 │ pipeline.orchestrator     │ INFO    │ Processing 1 jobs at stage TEXT_EXTRACTED
+19:38:09 │ pipeline.orchestrator     │ INFO    │ Job 0 complete
+19:38:09 │ pipeline.orchestrator     │ INFO    │ Pipeline summary: {'DONE': 1}

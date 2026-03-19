@@ -1,0 +1,308 @@
+{
+  "source_pdf": "chem201600922-sup-0001-misc_information.pdf",
+  "n_embedded": 14,
+  "n_pages": 27,
+  "figures": [
+    {
+      "type": "embedded",
+      "file": "embedded/fig_001.jpg",
+      "page": 1,
+      "width": 2476,
+      "height": 652,
+      "bytes": 153851
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_002.png",
+      "page": 5,
+      "width": 1081,
+      "height": 561,
+      "bytes": 24293
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_003.png",
+      "page": 5,
+      "width": 911,
+      "height": 646,
+      "bytes": 79512
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_004.png",
+      "page": 6,
+      "width": 814,
+      "height": 388,
+      "bytes": 13886
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_005.png",
+      "page": 6,
+      "width": 810,
+      "height": 389,
+      "bytes": 14291
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_006.png",
+      "page": 6,
+      "width": 811,
+      "height": 389,
+      "bytes": 15036
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_007.png",
+      "page": 6,
+      "width": 813,
+      "height": 431,
+      "bytes": 10556
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_008.png",
+      "page": 8,
+      "width": 408,
+      "height": 540,
+      "bytes": 30830
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_009.jpg",
+      "page": 9,
+      "width": 863,
+      "height": 666,
+      "bytes": 39742
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_010.jpg",
+      "page": 10,
+      "width": 402,
+      "height": 391,
+      "bytes": 14763
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_011.jpg",
+      "page": 10,
+      "width": 362,
+      "height": 313,
+      "bytes": 10704
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_012.jpg",
+      "page": 10,
+      "width": 390,
+      "height": 346,
+      "bytes": 14133
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_013.jpg",
+      "page": 11,
+      "width": 1660,
+      "height": 551,
+      "bytes": 60609
+    },
+    {
+      "type": "embedded",
+      "file": "embedded/fig_014.jpg",
+      "page": 11,
+      "width": 1491,
+      "height": 722,
+      "bytes": 86416
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_001.png",
+      "page": 1,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_002.png",
+      "page": 2,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_003.png",
+      "page": 3,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_004.png",
+      "page": 4,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_005.png",
+      "page": 5,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_006.png",
+      "page": 6,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_007.png",
+      "page": 7,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_008.png",
+      "page": 8,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_009.png",
+      "page": 9,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_010.png",
+      "page": 10,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_011.png",
+      "page": 11,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_012.png",
+      "page": 12,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_013.png",
+      "page": 13,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_014.png",
+      "page": 14,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_015.png",
+      "page": 15,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_016.png",
+      "page": 16,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_017.png",
+      "page": 17,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_018.png",
+      "page": 18,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_019.png",
+      "page": 19,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_020.png",
+      "page": 20,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_021.png",
+      "page": 21,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_022.png",
+      "page": 22,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_023.png",
+      "page": 23,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_024.png",
+      "page": 24,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_025.png",
+      "page": 25,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_026.png",
+      "page": 26,
+      "width": 1654,
+      "height": 2339
+    },
+    {
+      "type": "page_render",
+      "file": "pages/page_027.png",
+      "page": 27,
+      "width": 1654,
+      "height": 2339
+    }
+  ]
+}

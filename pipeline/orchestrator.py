@@ -255,6 +255,7 @@ class Pipeline:
         job_id = job["id"]
         doi = job["doi"] if "doi" in job.keys() else None
         folder_name = doi_to_path(doi) if doi else str(job_id)
+        simple_names = self.config.get("xyz_extraction", "simple_names", default=False)
 
         downloads = self.db.get_downloads(job_id, file_type="pdf")
         text_dir = Path(self.config["paths"]["text_dir"]) / folder_name
@@ -268,7 +269,8 @@ class Pipeline:
             # ── Text extraction (via Stirling) ────────────────────────
             output_subdir = text_dir / pdf_path.stem
             try:
-                result = process_pdf(pdf_path, self.stirling, output_subdir)
+                result = process_pdf(pdf_path, self.stirling, output_subdir,
+                                     simple_names=simple_names)
                 self.db.mark_download_processed(dl["id"])
                 if result.get("has_xyz"):
                     logger.info(
@@ -295,7 +297,7 @@ class Pipeline:
         # Also route non-PDF files (xyz, docx, xlsx, zip) through handlers
         dl_dir = Path(self.config["paths"]["download_dir"]) / folder_name
         if dl_dir.is_dir():
-            route_files(dl_dir)
+            route_files(dl_dir, simple_names=simple_names)
 
         self.db.advance(job_id, JobStatus.PDF_PROCESSED)
 
@@ -304,6 +306,7 @@ class Pipeline:
         job_id = job["id"]
         doi = job["doi"] if "doi" in job.keys() else None
         folder_name = doi_to_path(doi) if doi else str(job_id)
+        simple_names = self.config.get("xyz_extraction", "simple_names", default=False)
 
         text_dir = Path(self.config["paths"]["text_dir"]) / folder_name
         comp_dir = Path(self.config["paths"]["comp_details_dir"])
@@ -328,7 +331,7 @@ class Pipeline:
         if dl_dir.is_dir():
             for xyz_file in dl_dir.rglob("*.xyz"):
                 try:
-                    repack_xyz_blocks(xyz_file)
+                    repack_xyz_blocks(xyz_file, simple_names=simple_names)
                 except Exception as exc:
                     logger.warning("XYZ repack failed for %s: %s", xyz_file, exc)
 

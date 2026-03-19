@@ -1,0 +1,13 @@
+{
+  "software": "Gaussian 09",
+  "basis_set": "cc-PVDZ",
+  "method_family": [
+    "DFT"
+  ],
+  "calculation_types": [
+    "geometry_optimization",
+    "transition_state_optimization"
+  ],
+  "special_treatments": "polarized continuum model to incorporate solvent effect (MeCN)",
+  "comments": "Energy barrier calculations for iodination and astatination were performed by varying the distance between the halide and the Cipso atom."
+}

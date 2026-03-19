@@ -125,11 +125,11 @@ def unzip_file(source_file: Path) -> list[Path]:
 # ═════════════════════════════════════════════════════════════════════════
 # Per-type handlers
 # ═════════════════════════════════════════════════════════════════════════
-def process_xyz(file_path: Path, dest_dir: Path) -> Optional[Path]:
+def process_xyz(file_path: Path, dest_dir: Path, simple_names: bool = False) -> Optional[Path]:
     """Copy .xyz file and repack its blocks."""
     new_path = copy_unique(file_path, dest_dir, unique=False)
     try:
-        repack_xyz_blocks(new_path)
+        repack_xyz_blocks(new_path, simple_names=simple_names)
         return new_path
     except Exception as exc:
         logger.warning("Failed to repack XYZ %s: %s", file_path.name, exc)
@@ -178,7 +178,7 @@ HANDLERS: Dict[str, Callable] = {
 # ═════════════════════════════════════════════════════════════════════════
 # Route all files in a download directory
 # ═════════════════════════════════════════════════════════════════════════
-def route_files(root_dir: Path) -> dict[str, list[Path]]:
+def route_files(root_dir: Path, simple_names: bool = False) -> dict[str, list[Path]]:
     """
     Scan *root_dir* recursively, route each file to a Raw-{TYPE}
     subdirectory, and invoke the appropriate handler.
@@ -213,7 +213,10 @@ def route_files(root_dir: Path) -> dict[str, list[Path]]:
             continue  # already handled
         handler = HANDLERS.get(ext)
         if handler:
-            result = handler(path, dest_dirs.get(ext, root_dir / f"Raw-{ext}"))
+            if ext == ".xyz":
+                result = handler(path, dest_dirs.get(ext, root_dir / "Raw-XYZ"), simple_names=simple_names)
+            else:
+                result = handler(path, dest_dirs.get(ext, root_dir / f"Raw-{ext}"))
             results.setdefault(ext, []).append(path)
 
     return results

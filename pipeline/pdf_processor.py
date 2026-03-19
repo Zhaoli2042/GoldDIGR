@@ -30,6 +30,7 @@ def process_pdf(
     pdf_path: Path,
     client: StirlingClient,
     output_dir: Path,
+    simple_names: bool = False,
 ) -> dict:
     """
     Full processing pipeline for a single SI PDF:
@@ -78,7 +79,7 @@ def process_pdf(
     combined_text = _DASH_CHARS.sub("-", combined_text)
 
     # ── Steps 5–7: Cleanup + XYZ extraction ──────────────────────────
-    result = process_text_file(combined_text, output_dir, stem)
+    result = process_text_file(combined_text, output_dir, stem, simple_names=simple_names)
     result["all_texts"] = page_texts
 
     return result
@@ -87,6 +88,7 @@ def process_pdf(
 def process_pdf_from_text(
     text_path: Path,
     output_dir: Path,
+    simple_names: bool = False,
 ) -> dict:
     """
     Process an already-extracted text file (skips StirlingPDF steps).
@@ -94,4 +96,4 @@ def process_pdf_from_text(
     """
     text = text_path.read_text(encoding="utf-8", errors="ignore")
     text = _DASH_CHARS.sub("-", text)
-    return process_text_file(text, output_dir, text_path.stem)
+    return process_text_file(text, output_dir, text_path.stem, simple_names=simple_names)

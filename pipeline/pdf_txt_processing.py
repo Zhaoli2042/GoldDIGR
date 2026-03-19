@@ -366,6 +366,7 @@ def process_text_file(
     text: str,
     output_dir: Path,
     stem: str,
+    simple_names: bool = False,
 ) -> dict:
     """
     Run the full cleanup + XYZ extraction chain on a single text string.
@@ -382,6 +383,8 @@ def process_text_file(
         Directory for output files.
     stem : str
         Base filename stem for outputs.
+    simple_names : bool
+        If True, use simple sequential XYZ names (01.xyz, 02.xyz).
 
     Returns
     -------
@@ -408,7 +411,7 @@ def process_text_file(
     rm_footer_path.write_text("\n".join(cleaned_lines), encoding="utf-8")
 
     # Step 3: Repack into XYZ blocks
-    n_blocks = repack_xyz_blocks(rm_footer_path)
+    n_blocks = repack_xyz_blocks(rm_footer_path, simple_names=simple_names)
     result["n_blocks"] = n_blocks
     result["rm_footer_path"] = rm_footer_path
     logger.info("%s: Extracted %d XYZ blocks", stem, n_blocks)
@@ -419,7 +422,7 @@ def process_text_file(
 # ═════════════════════════════════════════════════════════════════════════
 # Folder-level processing (matches original pdf_txt_cleanup interface)
 # ═════════════════════════════════════════════════════════════════════════
-def pdf_txt_cleanup(target_dir: str, case: str = "First_time") -> None:
+def pdf_txt_cleanup(target_dir: str, case: str = "First_time", simple_names: bool = False) -> None:
     """
     Process a folder of text files through the cleanup chain.
 
@@ -442,11 +445,11 @@ def pdf_txt_cleanup(target_dir: str, case: str = "First_time") -> None:
             if "rm_footer" in txt_file.name:
                 continue
             text = txt_file.read_text(encoding="utf-8", errors="ignore")
-            process_text_file(text, target, txt_file.stem)
+            process_text_file(text, target, txt_file.stem, simple_names=simple_names)
 
     elif case == "Process_PDF_XYZ":
         for txt_file in target.glob("*.rm_footer.txt"):
-            repack_xyz_blocks(txt_file)
+            repack_xyz_blocks(txt_file, simple_names=simple_names)
 
     elif case == "Fix":
         for txt_file in target.glob("*rm_footer.txt"):
