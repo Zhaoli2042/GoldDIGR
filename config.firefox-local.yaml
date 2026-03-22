@@ -135,3 +135,14 @@ llm:
   model: "${LLM_MODEL:-gpt-4o}"
   temperature: 0.2
   max_chars: 200000
+
+# ── Agent: automated Cloudflare CAPTCHA solving ─────────────────────────
+# Requires: pip install -r requirements-agent.txt
+# Also requires: xdotool (Linux) or cliclick (macOS) for cursor control
+agent:
+  enabled: false
+  providers:
+    - qwen-vl-local
+  model_size: 3b
+  max_attempts: 2
+  device: auto

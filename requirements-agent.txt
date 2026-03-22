@@ -1,0 +1,31 @@
+# Agent dependencies for automated Cloudflare CAPTCHA solving.
+# Install only if you enable agent.enabled: true in config.yaml.
+#
+# Usage: pip install -r requirements-agent.txt
+#
+# Also install a cursor control tool for your OS:
+#   Linux:  sudo apt install xdotool
+#   macOS:  brew install cliclick
+#   Any:    pip install pyautogui  (cross-platform fallback)
+
+# ── Core (required) ─────────────────────────────────────────────────────
+torch>=2.1
+transformers>=4.40
+accelerate>=0.27
+Pillow>=10.0
+mss>=9.0                           # full-screen screenshot capture
+
+# ── Qwen2.5-VL (default provider) ──────────────────────────────────────
+# 3B model: ~7GB VRAM, ~1s/image  (model_size: 3b)
+# 7B model: ~16GB VRAM, ~2s/image (model_size: 7b)
+# Models auto-download from HuggingFace on first use.
+qwen-vl-utils>=0.0.2
+
+# ── Florence-2 (alternative, has compatibility issues with newer transformers)
+# No extra packages — uses transformers directly.
+# If using Florence, you may need: pip install transformers==4.45.2
+
+# ── API providers (no GPU needed, costs ~$0.01-0.05/call) ───────────────
+# These are already in requirements.txt if you use LLM extraction:
+# openai>=1.30
+# anthropic>=0.25

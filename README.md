@@ -1,10 +1,4 @@
-# GoldDIGR: Search, Download, Analyze Open-Source Chemistry Data
-
-<div align="center">
-
-![Logo](Logo.png)
-
-</div>
+# golddigr
 
 Systematic, resumable mining of supplementary information (SI) files from
 chemistry journal articles. Extracts XYZ coordinates, computational-chemistry
@@ -131,7 +125,7 @@ appears, the pipeline will prompt you to solve it manually and retry.
 
 ### Option C: Local Firefox
 
-For websites without aggressive bot detection.
+For publishers without aggressive bot detection (ACS, RSC, etc.).
 
 ```bash
 # 1. Start StirlingPDF
@@ -221,7 +215,7 @@ Three example configs are provided:
 | File | Browser | Profile | Headless | Use case |
 |------|---------|---------|----------|----------|
 | `config.yaml` | Firefox | Clean | Yes | Docker / Singularity |
-| `config.chrome.yaml` | Chrome | Your profile | No | Cloudflare-heavy |
+| `config.chrome.yaml` | Chrome | Your profile | No | Cloudflare-heavy publishers |
 | `config.firefox-local.yaml` | Firefox | Clean | Yes | Local, no Cloudflare issues |
 
 Copy whichever fits your use case to `config.yaml`.
@@ -239,21 +233,40 @@ scraper:
 
 ## Cloudflare Handling
 
-Many websites use Cloudflare bot detection. golddigr
+Many publishers (especially Wiley) use Cloudflare bot detection. golddigr
 handles this with a multi-tier approach:
 
-1. **Automatic wait** — If a challenge page is detected, waits 5s → 10s → 15s
-   for it to auto-clear (often works for IP-based challenges)
+1. **Automatic wait** — If a challenge page is detected, waits for it to
+   auto-clear (often works for IP-based challenges)
 
 2. **Chrome + user profile** — Using `browser: chrome` with `browser_profile: auto`
    launches Chrome with your real cookies and browser fingerprint. Cloudflare
    sees a legitimate browser and usually skips the challenge entirely.
 
-3. **Interactive fallback** — If challenges persist and `interactive: true`,
-   the pipeline opens the URL in your default browser and prompts you to solve
-   the CAPTCHA. Type Enter to retry or `s` to skip the article.
+3. **Agent auto-click (optional)** — A local vision model (Qwen2.5-VL) takes a
+   screenshot, finds the Cloudflare checkbox, and clicks it via `xdotool`.
+   Requires a GPU and extra dependencies:
 
-4. **Cached challenge detection** — If a previously saved HTML file contains a
+   ```bash
+   pip install -r requirements-agent.txt
+   sudo apt install xdotool   # Linux
+   ```
+
+   Enable in config.yaml:
+   ```yaml
+   agent:
+     enabled: true
+     providers:
+       - qwen-vl-local        # Qwen2.5-VL-3B (~7GB VRAM)
+     model_size: 3b           # or "7b" for more accuracy (~16GB VRAM)
+     device: auto
+   ```
+
+4. **Interactive fallback** — If all automated methods fail and `interactive: true`,
+   the pipeline prompts you to solve the CAPTCHA manually. Type Enter to retry
+   or `s` to skip the article.
+
+5. **Cached challenge detection** — If a previously saved HTML file contains a
    Cloudflare challenge page, it's automatically deleted and re-downloaded.
 
 ## Project Structure
@@ -268,6 +281,9 @@ golddigr/
 ├── .env.example                # API key template
 ├── run.py                      # CLI entry point
 ├── golddigr                    # Singularity/Apptainer wrapper
+├── requirements.txt            # Core dependencies
+├── requirements-agent.txt      # Optional: agent auto-click dependencies
+├── sample-data/                # Example input/output from one article
 ├── pipeline/
 │   ├── orchestrator.py         # State-machine driver
 │   ├── job_db.py               # SQLite job ledger
@@ -280,7 +296,14 @@ golddigr/
 │   ├── file_processors.py      # Route files by type (docx/xlsx/zip → text)
 │   ├── metadata.py             # HTML meta → BibLaTeX
 │   ├── figure_extractor.py     # PDF figure extraction
-│   └── cc_detector.py          # Comp-chem keyword detection + LLM
+│   ├── cc_detector.py          # Comp-chem keyword detection + LLM
+│   └── agent/                  # Optional: automated CAPTCHA solving
+│       ├── solver.py           # Orchestration: screenshot → model → click
+│       ├── clicker.py          # OS cursor control (xdotool / cliclick)
+│       └── vision/             # Vision model providers
+│           ├── qwen_vl.py      # Qwen2.5-VL (local, default)
+│           ├── florence.py     # Florence-2 (local, experimental)
+│           └── api_provider.py # Claude / OpenAI API fallback
 └── data/                       # Mounted volumes (gitignored)
 ```
 

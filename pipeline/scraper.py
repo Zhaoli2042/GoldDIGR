@@ -381,6 +381,7 @@ def _create_driver(
             "--no-default-browser-check",
             "--disable-popup-blocking",
             "--disable-features=ChromePDF",  # force PDF download instead of viewer
+            "--disable-extensions",          # prevent adblock welcome tabs
         ]
         if headless:
             cmd.append("--headless=new")
@@ -592,6 +593,7 @@ def _download_worker(
     page_load_timeout: int = 15,
     profile_path: Optional[str] = None,
     chrome_profile_directory: Optional[str] = None,
+    agent_config: Optional[dict] = None,
 ):
     """
     Download worker — runs in its own thread.
@@ -599,8 +601,8 @@ def _download_worker(
     Launches a browser, navigates to *link*, and lets the download
     manager save the file. For text-format files, saves page_source.
 
-    If a Cloudflare challenge is detected, waits for it to clear
-    before re-navigating to the download URL.
+    If a Cloudflare challenge is detected, waits for it to clear,
+    then tries agent click if enabled, before re-navigating.
 
     Signals *done_event* when finished (or on error).
     """
@@ -637,7 +639,8 @@ def _download_worker(
         # Check for Cloudflare challenge and wait for it to clear
         try:
             html = new_driver.page_source
-            challenge_waits = [5, 10, 15]
+            agent_enabled = agent_config and agent_config.get("enabled")
+            challenge_waits = [5] if agent_enabled else [5, 10, 15]
             for attempt, wait in enumerate(challenge_waits, 1):
                 if not _is_bot_challenge(html):
                     break
@@ -647,6 +650,15 @@ def _download_worker(
                 )
                 time.sleep(wait)
                 html = new_driver.page_source
+
+            # Try agent click if challenge persists
+            if _is_bot_challenge(html) and agent_enabled:
+                try:
+                    from .agent import attempt_click
+                    if attempt_click(new_driver, agent_config):
+                        html = new_driver.page_source
+                except Exception as exc:
+                    logger.warning("Download: agent click failed: %s", exc)
 
             # If challenge cleared, re-navigate to trigger the actual download
             if not _is_bot_challenge(html):
@@ -742,6 +754,7 @@ def scrape_html(
     browser: str = "firefox",
     browser_profile: Optional[str] = None,
     chrome_profile_directory: Optional[str] = None,
+    agent_config: Optional[dict] = None,
     # Legacy alias (ignored if browser_profile is set)
     firefox_profile: Optional[str] = None,
 ) -> Path:
@@ -807,7 +820,10 @@ def scrape_html(
             raise RuntimeError(f"IP Address Blocked detected for {url}")
 
         # Bot challenge — wait for it to clear
-        challenge_waits = [5, 10, 15]
+        # If agent is enabled, just one quick wait then hand off to agent.
+        # If no agent, try the full 5s → 10s → 15s progression.
+        agent_enabled = agent_config and agent_config.get("enabled")
+        challenge_waits = [5] if agent_enabled else [5, 10, 15]
         for attempt, wait in enumerate(challenge_waits, 1):
             if not _is_bot_challenge(html):
                 break
@@ -818,7 +834,24 @@ def scrape_html(
             time.sleep(wait)
             html = driver.page_source
 
-        # Automatic waits didn't clear it
+        # Automatic waits didn't clear it — try agent click
+        if _is_bot_challenge(html) and agent_config and agent_config.get("enabled"):
+            try:
+                from .agent import attempt_click
+                if attempt_click(driver, agent_config):
+                    html = driver.page_source
+            except Exception as exc:
+                # Distinguish real missing module from model loading errors
+                exc_str = str(exc)
+                if "No module named" in exc_str and "agent" in exc_str:
+                    logger.warning(
+                        "Agent module not available. Install with: "
+                        "pip install -r requirements-agent.txt"
+                    )
+                else:
+                    logger.warning("Agent click failed: %s", exc)
+
+        # Agent didn't clear it — fall back to interactive
         if _is_bot_challenge(html):
             if interactive:
                 logger.info("Opening in default browser for manual challenge solving: %s", url)
@@ -880,6 +913,7 @@ def download_file(
     browser: str = "firefox",
     browser_profile: Optional[str] = None,
     chrome_profile_directory: Optional[str] = None,
+    agent_config: Optional[dict] = None,
     # Legacy alias
     firefox_profile: Optional[str] = None,
 ) -> Optional[Path]:
@@ -922,7 +956,11 @@ def download_file(
         t_worker = threading.Thread(
             target=_download_worker,
             args=(browser, dest_dir, full_url, pid_holder, done_event, headless),
-            kwargs={"profile_path": profile_path, "chrome_profile_directory": chrome_profile_directory},
+            kwargs={
+                "profile_path": profile_path,
+                "chrome_profile_directory": chrome_profile_directory,
+                "agent_config": agent_config,
+            },
             daemon=True,
         )
         t_watchdog = threading.Thread(

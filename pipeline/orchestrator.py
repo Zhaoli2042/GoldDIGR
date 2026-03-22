@@ -166,6 +166,7 @@ class Pipeline:
             browser=self.config.get("scraper", "browser", default="firefox"),
             browser_profile=self.config.get("scraper", "browser_profile", default=None),
             chrome_profile_directory=self.config.get("scraper", "chrome_profile_directory", default=None),
+            agent_config=self.config.get("agent", default=None),
         )
         self.db.advance(job_id, JobStatus.HTML_SCRAPED, html_path=str(output))
 
@@ -237,6 +238,7 @@ class Pipeline:
                 browser=self.config.get("scraper", "browser", default="firefox"),
                 browser_profile=self.config.get("scraper", "browser_profile", default=None),
                 chrome_profile_directory=self.config.get("scraper", "chrome_profile_directory", default=None),
+                agent_config=self.config.get("agent", default=None),
             )
             if result:
                 suffix = result.suffix.lower().lstrip(".")

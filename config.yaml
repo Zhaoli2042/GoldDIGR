@@ -125,3 +125,17 @@ llm:
   model: "${LLM_MODEL:-gpt-4o}"
   temperature: 0.2
   max_chars: 200000
+
+# ── Agent: automated Cloudflare CAPTCHA solving ─────────────────────────
+# Requires: pip install -r requirements-agent.txt
+# Also requires: xdotool (Linux) or cliclick (macOS) for cursor control
+agent:
+  enabled: false
+  providers:                       # tried in order until one succeeds
+    - qwen-vl-local                # Qwen2.5-VL (default, reliable)
+    # - florence-local             # Florence-2 (fast but has compatibility issues)
+    # - claude-api                # uses ANTHROPIC_API_KEY
+    # - openai-api                # uses OPENAI_API_KEY
+  model_size: 3b                   # qwen-vl-local: "3b" (~7GB VRAM) or "7b" (~16GB VRAM)
+  max_attempts: 2                  # retries per provider
+  device: auto                     # cuda, cpu, or auto
