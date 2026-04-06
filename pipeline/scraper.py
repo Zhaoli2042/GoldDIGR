@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 import psutil
+import requests as _requests_lib
 from selenium import webdriver
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
@@ -43,6 +44,107 @@ DEFAULT_TIMEOUT = 90
 
 # ── Default cookie strategies to try sequentially ──────────────────────
 DEFAULT_COOKIE_STRATEGIES = ["", "?cookieSet=0", "?cookieSet=1", "?cookieSet=2"]
+
+# ═════════════════════════════════════════════════════════════════════════
+# Requests fast path — for publishers that support plain HTTP / TDM access.
+# Only tried for whitelisted domains. Never touches Wiley/ACS/Elsevier.
+# ═════════════════════════════════════════════════════════════════════════
+_REQUESTS_OK_DOMAINS: dict[str, dict] = {
+    "rsc.org":          {"User-Agent": "TDMCrawler"},
+    "springer.com":     {},
+    "nature.com":       {},
+    "springerlink.com": {},
+}
+
+
+def _get_tdm_headers(url: str) -> Optional[dict]:
+    """Return TDM headers if the URL domain is in the whitelist, else None."""
+    from urllib.parse import urlparse
+    hostname = urlparse(url).hostname or ""
+    for domain, headers in _REQUESTS_OK_DOMAINS.items():
+        if hostname.endswith(domain):
+            return headers
+    return None
+
+
+def _try_requests_html(url: str, output_path: Path) -> bool:
+    """
+    Try fetching article HTML via plain requests (no browser).
+    Only attempted for whitelisted TDM-friendly publishers.
+
+    Returns True if successful (HTML saved), False to fall back to Selenium.
+    """
+    headers = _get_tdm_headers(url)
+    if headers is None:
+        return False  # not a whitelisted domain
+
+    try:
+        r = _requests_lib.get(url, timeout=30, headers=headers, stream=True)
+        if r.status_code != 200:
+            logger.debug("Requests fast path: HTTP %d for %s", r.status_code, url)
+            return False
+
+        text = r.text
+        if _is_bot_challenge(text):
+            logger.debug("Requests fast path: bot challenge for %s, falling back", url)
+            return False
+
+        # Sanity check: must look like an actual article page
+        if len(text) < 1000:
+            logger.debug("Requests fast path: response too short (%d chars)", len(text))
+            return False
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text, encoding="utf-8")
+        logger.info("Requests fast path: saved HTML → %s", output_path)
+        return True
+
+    except Exception as exc:
+        logger.debug("Requests fast path failed for %s: %s", url, exc)
+        return False
+
+
+def _try_requests_download(url: str, dest_dir: Path) -> Optional[Path]:
+    """
+    Try downloading a file via plain requests (no browser).
+    Only attempted for whitelisted TDM-friendly publishers.
+
+    Returns the file Path if successful, None to fall back to Selenium.
+    """
+    headers = _get_tdm_headers(url)
+    if headers is None:
+        return None
+
+    try:
+        with _requests_lib.get(url, timeout=60, headers=headers, stream=True) as r:
+            if r.status_code != 200:
+                return None
+
+            # Check content type — don't save HTML error pages as downloads
+            ctype = r.headers.get("content-type", "").lower()
+            if "text/html" in ctype:
+                # Might be a redirect to a login page
+                return None
+
+            filename = deduce_filename(url)
+            filepath = dest_dir / filename
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            with filepath.open("wb") as fh:
+                for chunk in r.iter_content(chunk_size=32768):
+                    fh.write(chunk)
+
+            # Verify we got something real
+            if filepath.stat().st_size < 100:
+                filepath.unlink(missing_ok=True)
+                return None
+
+            logger.info("Requests fast path: saved %s → %s", filename, filepath)
+            return filepath
+
+    except Exception as exc:
+        logger.debug("Requests fast path download failed for %s: %s", url, exc)
+        return None
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -797,6 +899,10 @@ def scrape_html(
         else:
             return output_path
 
+    # ── Requests fast path (TDM-friendly publishers only) ─────────
+    if _try_requests_html(url, output_path):
+        return output_path
+
     profile_path = _resolve_profile(browser, browser_profile)
 
     driver = _create_driver(
@@ -950,6 +1056,11 @@ def download_file(
     # Already downloaded?
     if check_file_and_size(actual_file):
         return actual_file
+
+    # ── Requests fast path (TDM-friendly publishers only) ─────────
+    result = _try_requests_download(url, dest_dir)
+    if result is not None:
+        return result
 
     for i, strategy in enumerate(strategies):
         full_url = url + strategy
