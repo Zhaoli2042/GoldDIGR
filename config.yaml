@@ -1,0 +1,141 @@
+###############################################################################
+# Gold Pipeline Configuration
+#
+# This is the default config for running inside Docker (docker compose up).
+# For local use, see config.chrome.yaml or config.firefox-local.yaml.
+###############################################################################
+
+# ── Input ────────────────────────────────────────────────────────────────
+input:
+  csv_path: "/app/data/input/articles.csv"
+  url_column: "ArticleURL"
+
+# ── Directories ──────────────────────────────────────────────────────────
+paths:
+  html_dir: "/app/data/downloads/html"
+  download_dir: "/app/data/downloads/files"
+  text_dir: "/app/data/output/text"
+  xyz_dir: "/app/data/output/xyz"
+  figures_dir: "/app/data/output/figures"
+  biblatex_dir: "/app/data/output/biblatex"
+  comp_details_dir: "/app/data/output/comp_details"
+  db_path: "/app/data/db/pipeline.db"
+
+# ── StirlingPDF ──────────────────────────────────────────────────────────
+stirling:
+  base_url: "${STIRLING_URL:-http://localhost:8080}"
+  timeout: 120
+  retries: 3
+
+# ── Scraper settings ────────────────────────────────────────────────────
+scraper:
+  browser: firefox                   # firefox works inside Docker
+  browser_profile: none              # no user profile in containers
+  chrome_profile_directory: Default
+  headless: true                     # must be true inside Docker (no display)
+  interactive: false                 # no terminal input in Docker
+  page_load_timeout: 20
+  download_timeout: 90
+  delay_between_articles: 20
+  delay_after_downloads: 30
+  delay_on_empty_links: 60
+  max_retries: 3
+  cookie_strategies:
+    - ""
+    - "?cookieSet=0"
+    - "?cookieSet=1"
+    - "?cookieSet=2"
+
+# ── File types ───────────────────────────────────────────────────────────
+file_types:
+  auto_download:
+    - .pdf
+    - .xyz
+    - .cif
+    - .txt
+    - .xlsx
+    - .mol
+    - .mol2
+    - .data
+    - .docx
+    - .pdb
+    - .zip
+    - .csv
+  text_in_browser:
+    - .txt
+    - .csv
+    - .xml
+    - .html
+    - .mol
+    - .mol2
+
+# ── PDF Processing ──────────────────────────────────────────────────────
+pdf_processing:
+  footer_keywords:
+    - "Copyright"
+    - "Royal"
+    - "Society"
+    - "Wiley"
+    - "American"
+    - "Supplemental"
+    - "Information"
+    - "Communications"
+    - "Supplementary"
+  margin_lines: 5
+
+# ── Computational chemistry detection ───────────────────────────────────
+cc_detection:
+  keywords:
+    - "computational"
+    - "theoretical"
+    - "DFT"
+    - "Gaussian"
+    - "ORCA"
+    - "Jaguar"
+    - "basis set"
+    - "functional"
+    - "CCSD"
+    - "coupled cluster"
+    - "B3LYP"
+    - "M06"
+    - "PBE"
+    - "6-31G"
+    - "CPCM"
+    - "dispersion"
+    - "transition state"
+    - "frequency"
+    - "imaginary"
+    - "coordinates"
+    - "optimization"
+    - "solvation"
+    - "polarization"
+
+# ── XYZ / transition state detection ────────────────────────────────────
+ts_detection:
+  keywords: ["TS", "transition", "state", "imag"]
+  extensions: [".xyz", ".mol", ".mol2"]
+
+# ── XYZ extraction options ──────────────────────────────────────────────
+xyz_extraction:
+  simple_names: true               # true: 01.xyz, 02.xyz  |  false: 01_block_name.xyz
+
+# ── LLM extraction ──────────────────────────────────────────────────────
+llm:
+  provider: "${LLM_PROVIDER:-openai}"
+  model: "${LLM_MODEL:-gpt-4o}"
+  temperature: 0.2
+  max_chars: 200000
+
+# ── Agent: automated Cloudflare CAPTCHA solving ─────────────────────────
+# Requires: pip install -r requirements-agent.txt
+# Also requires: xdotool (Linux) or cliclick (macOS) for cursor control
+agent:
+  enabled: false
+  providers:                       # tried in order until one succeeds
+    - qwen-vl-local                # Qwen2.5-VL (default, reliable)
+    # - florence-local             # Florence-2 (fast but has compatibility issues)
+    # - claude-api                # uses ANTHROPIC_API_KEY
+    # - openai-api                # uses OPENAI_API_KEY
+  model_size: 3b                   # qwen-vl-local: "3b" (~7GB VRAM) or "7b" (~16GB VRAM)
+  max_attempts: 2                  # retries per provider
+  device: auto                     # cuda, cpu, or auto

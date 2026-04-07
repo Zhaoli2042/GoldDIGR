@@ -1,0 +1,13 @@
+# Normalize line endings to LF on commit, checkout as-is
+* text=auto eol=lf
+
+# Force LF for scripts (must work on Linux/Docker)
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.sif binary

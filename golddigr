@@ -1,0 +1,72 @@
+#!/bin/bash
+# golddigr — wrapper for running golddigr
+#
+# "plugin *" commands run on the HOST via plugin.py (no container needed).
+# Core pipeline commands (scrape, extract) run inside the container via run.py.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ══════════════════════════════════════════════════════════════════════
+# Plugin commands → plugin.py (HOST, no container)
+# ══════════════════════════════════════════════════════════════════════
+if [[ "${1:-}" == "plugin" ]]; then
+    shift  # remove "plugin" — plugin.py handles subcommands directly
+
+    mkdir -p "$SCRIPT_DIR/data/output" "$SCRIPT_DIR/plugins" 2>/dev/null || true
+
+    if ! python3 -c "import yaml, requests" 2>/dev/null; then
+        echo "⚠  Missing Python dependencies for plugin commands."
+        echo "   Install with: pip install --user pyyaml requests"
+        exit 1
+    fi
+
+    cd "$SCRIPT_DIR"
+    exec python3 "$SCRIPT_DIR/plugin.py" "$@"
+fi
+
+# ══════════════════════════════════════════════════════════════════════
+# Everything else: run inside the container
+# ══════════════════════════════════════════════════════════════════════
+
+# Find the SIF
+if [[ -f "$SCRIPT_DIR/golddigr.sif" ]]; then
+    SIF="$SCRIPT_DIR/golddigr.sif"
+elif [[ -f "./golddigr.sif" ]]; then
+    SIF="./golddigr.sif"
+elif [[ -n "${GOLDDIGR_SIF:-}" && -f "$GOLDDIGR_SIF" ]]; then
+    SIF="$GOLDDIGR_SIF"
+else
+    echo "Error: golddigr.sif not found." >&2
+    echo "  Place it next to this script, in the current directory," >&2
+    echo "  or set GOLDDIGR_SIF=/path/to/golddigr.sif" >&2
+    exit 1
+fi
+
+# Detect runtime
+if command -v apptainer &>/dev/null; then
+    RUNTIME="apptainer"
+elif command -v singularity &>/dev/null; then
+    RUNTIME="singularity"
+else
+    echo "Error: Neither apptainer nor singularity found in PATH." >&2
+    exit 1
+fi
+
+# Build env flags
+ENV_FLAGS=()
+[[ -n "${OPENAI_API_KEY:-}" ]]    && ENV_FLAGS+=(--env "OPENAI_API_KEY=$OPENAI_API_KEY")
+[[ -n "${ANTHROPIC_API_KEY:-}" ]] && ENV_FLAGS+=(--env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+
+# Create data directories if needed
+mkdir -p data/input data/output data/downloads data/db plugins
+
+# Run
+exec "$RUNTIME" run \
+    --bind ./data:/app/data \
+    --bind ./plugins:/app/plugins \
+    --pwd /app \
+    "${ENV_FLAGS[@]}" \
+    "$SIF" \
+    python run.py "$@"

@@ -1,0 +1,40 @@
+###############################################################################
+# cluster.yaml – HPC cluster configuration
+###############################################################################
+# Fill this in once for your cluster.  Plugins reference these values to
+# generate SLURM submission scripts.
+#
+# Copy this file to cluster.yaml and edit the values below.
+###############################################################################
+
+# ── SLURM account / partition ────────────────────────────────────────────
+slurm:
+  account: "PLACEHOLDER"      # -A / --account (set to your allocation)
+  partition: "cpu"             # -p / --partition
+  qos: "normal"               # --qos
+  time: "04:00:00"            # --time (per job)
+  nodes: 1
+  ntasks_per_node: 1
+
+# ── Environment setup ───────────────────────────────────────────────────
+# Shell commands run at the top of every SLURM script before any work.
+# Typically module loads + conda activation.
+env_setup:
+  - "module load conda/2025.02"
+  - "conda activate another-yarp"
+  - "module load intel-mkl"
+  - "module load openmpi"
+
+# ── Scratch / output paths on the cluster ────────────────────────────────
+paths:
+  # Where extracted packages are unpacked and jobs run.
+  # Each article gets a subdirectory here.
+  work_root: "/scratch/${USER}/golddigr-jobs"
+
+  # Where final results (zips) are collected after all stages complete.
+  results_root: "/scratch/${USER}/golddigr-results"
+
+# ── Job throttling ──────────────────────────────────────────────────────
+throttle:
+  max_concurrent: 10           # max SLURM jobs in queue at once
+  check_interval: 30           # seconds between queue checks (for submit_all.sh)

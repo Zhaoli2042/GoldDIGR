@@ -1,0 +1,148 @@
+###############################################################################
+# Gold Pipeline Configuration — Local Firefox
+#
+# Use this when running outside Docker with Firefox.
+# For publishers without aggressive bot detection (ACS, RSC, most others).
+# If you hit Cloudflare challenges, switch to config.chrome.yaml instead.
+#
+# Requirements:
+#   - Firefox (or firefox-esr) installed
+#   - geckodriver installed and in PATH
+#   - StirlingPDF running separately: docker run -p 8080:8080 stirlingtools/stirling-pdf:latest
+#
+# Usage:
+#   cp config.firefox-local.yaml config.yaml
+#   python run.py --start 0 --end 100
+###############################################################################
+
+# ── Input ────────────────────────────────────────────────────────────────
+input:
+  csv_path: "./data/input/articles.csv"
+  url_column: "ArticleURL"
+
+# ── Directories ──────────────────────────────────────────────────────────
+paths:
+  html_dir: "./data/downloads/html"
+  download_dir: "./data/downloads/files"
+  text_dir: "./data/output/text"
+  xyz_dir: "./data/output/xyz"
+  figures_dir: "./data/output/figures"
+  biblatex_dir: "./data/output/biblatex"
+  comp_details_dir: "./data/output/comp_details"
+  db_path: "./data/db/pipeline.db"
+
+# ── StirlingPDF ──────────────────────────────────────────────────────────
+stirling:
+  base_url: "${STIRLING_URL:-http://localhost:8080}"
+  timeout: 120
+  retries: 3
+
+# ── Scraper settings ────────────────────────────────────────────────────
+scraper:
+  browser: firefox
+  browser_profile: none              # "auto" to use your Firefox cookies (close Firefox first)
+  chrome_profile_directory: Default
+  headless: true                     # set false to watch the browser
+  interactive: false                 # set true + headless false for CAPTCHA fallback
+  page_load_timeout: 20
+  download_timeout: 90
+  delay_between_articles: 20
+  delay_after_downloads: 30
+  delay_on_empty_links: 60
+  max_retries: 3
+  cookie_strategies:
+    - ""
+    - "?cookieSet=0"
+    - "?cookieSet=1"
+    - "?cookieSet=2"
+
+# ── File types ───────────────────────────────────────────────────────────
+file_types:
+  auto_download:
+    - .pdf
+    - .xyz
+    - .cif
+    - .txt
+    - .xlsx
+    - .mol
+    - .mol2
+    - .data
+    - .docx
+    - .pdb
+    - .zip
+    - .csv
+  text_in_browser:
+    - .txt
+    - .csv
+    - .xml
+    - .html
+    - .mol
+    - .mol2
+
+# ── PDF Processing ──────────────────────────────────────────────────────
+pdf_processing:
+  footer_keywords:
+    - "Copyright"
+    - "Royal"
+    - "Society"
+    - "Wiley"
+    - "American"
+    - "Supplemental"
+    - "Information"
+    - "Communications"
+    - "Supplementary"
+  margin_lines: 5
+
+# ── Computational chemistry detection ───────────────────────────────────
+cc_detection:
+  keywords:
+    - "computational"
+    - "theoretical"
+    - "DFT"
+    - "Gaussian"
+    - "ORCA"
+    - "Jaguar"
+    - "basis set"
+    - "functional"
+    - "CCSD"
+    - "coupled cluster"
+    - "B3LYP"
+    - "M06"
+    - "PBE"
+    - "6-31G"
+    - "CPCM"
+    - "dispersion"
+    - "transition state"
+    - "frequency"
+    - "imaginary"
+    - "coordinates"
+    - "optimization"
+    - "solvation"
+    - "polarization"
+
+# ── XYZ / transition state detection ────────────────────────────────────
+ts_detection:
+  keywords: ["TS", "transition", "state", "imag"]
+  extensions: [".xyz", ".mol", ".mol2"]
+
+# ── XYZ extraction options ──────────────────────────────────────────────
+xyz_extraction:
+  simple_names: true               # true: 01.xyz, 02.xyz  |  false: 01_block_name.xyz
+
+# ── LLM extraction ──────────────────────────────────────────────────────
+llm:
+  provider: "${LLM_PROVIDER:-openai}"
+  model: "${LLM_MODEL:-gpt-4o}"
+  temperature: 0.2
+  max_chars: 200000
+
+# ── Agent: automated Cloudflare CAPTCHA solving ─────────────────────────
+# Requires: pip install -r requirements-agent.txt
+# Also requires: xdotool (Linux) or cliclick (macOS) for cursor control
+agent:
+  enabled: false
+  providers:
+    - qwen-vl-local
+  model_size: 3b
+  max_attempts: 2
+  device: auto

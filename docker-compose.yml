@@ -1,0 +1,51 @@
+###############################################################################
+# Gold Pipeline – Docker Compose
+#
+# Usage:
+#   docker compose up              # run full pipeline
+#   docker compose up stirling-pdf # just the PDF service (for local dev)
+#
+# The pipeline container waits for StirlingPDF to be healthy before starting.
+###############################################################################
+
+services:
+  # ── PDF processing engine (no user setup required) ─────────────────────
+  stirling-pdf:
+    image: stirlingtools/stirling-pdf:latest
+    container_name: stirling-pdf
+    environment:
+      - SECURITY_ENABLELOGIN=false          # no auth needed internally
+      - SYSTEM_DEFAULTLOCALE=en_US
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/info/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # No ports exposed to host — only the pipeline container talks to it.
+    # Uncomment to access StirlingPDF UI for debugging:
+    # ports: ["8080:8080"]
+    restart: unless-stopped
+
+  # ── Main pipeline ──────────────────────────────────────────────────────
+  pipeline:
+    build: .
+    container_name: gold-pipeline
+    depends_on:
+      stirling-pdf:
+        condition: service_healthy
+    environment:
+      STIRLING_URL: http://stirling-pdf:8080
+      # LLM provider settings (override via .env file or CLI)
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./data/input:/app/data/input        # place your CSV here
+      - ./data/output:/app/data/output      # results land here
+      - ./data/downloads:/app/data/downloads
+      - ./data/db:/app/data/db              # SQLite job ledger persists
+    # Default: process everything. Override with e.g.:
+    #   docker compose run pipeline python run.py --start 0 --end 100
+    command: ["python", "run.py"]
