@@ -16,3 +16,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Plugin knowledge base (generated, cluster-specific)
+plugins/_catalog.yaml
+plugins/_library/

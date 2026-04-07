@@ -1,9 +1,0 @@
-# ── SNIPPET: mpi_env_orca_ompi_overrides/ompi_slot_binding_mitigation_for_opportunistic_execute_nodes ─
-# Scheduler:   any
-# Tool:        orca
-# Tested:      golddigr
-# Notes: From run_orca_wbo.sh.
-# ────────────────────────────────────────────────────────────
-
-export OMPI_MCA_rmaps_base_oversubscribe=1
-export OMPI_MCA_hwloc_base_binding_policy=none
