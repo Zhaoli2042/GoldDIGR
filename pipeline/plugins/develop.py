@@ -793,15 +793,16 @@ def _build_workspace(
                 except OSError:
                     shutil.copy2(f, target)
 
-    # Symlink scripts/ if exists
-    scripts_dir = plugin_dir / "scripts"
-    if scripts_dir.is_dir():
-        ws_scripts = workspace / "scripts"
-        if not ws_scripts.exists():
-            try:
-                ws_scripts.symlink_to(scripts_dir.resolve())
-            except OSError:
-                shutil.copytree(scripts_dir, ws_scripts)
+    # Symlink scripts/ and templates/ if they exist
+    for dirname in ("scripts", "templates"):
+        src_dir = plugin_dir / dirname
+        if src_dir.is_dir():
+            ws_dir = workspace / dirname
+            if not ws_dir.exists():
+                try:
+                    ws_dir.symlink_to(src_dir.resolve())
+                except OSError:
+                    shutil.copytree(src_dir, ws_dir)
 
     # Create working directories
     (workspace / "logs").mkdir(exist_ok=True)

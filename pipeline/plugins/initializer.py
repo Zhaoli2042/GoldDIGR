@@ -161,19 +161,49 @@ def _extract_script_summary(script: Dict) -> str:
 
 def _identify_entry_point(scan: Dict) -> Optional[Dict]:
     """Identify the most likely entry-point script."""
-    # Priority: start.sh > main.sh > run.sh > first .sh
-    for name in ("start.sh", "main.sh", "run.sh", "launch.sh"):
+    # Scripts that are downstream/post-hoc — never entry points
+    _DEPRIORITIZE = ("stats", "check", "monitor", "summarize", "sankey",
+                     "compute_sco", "restart", "backup", "health")
+
+    def _is_deprioritized(name: str) -> bool:
+        name_lower = name.lower()
+        return any(kw in name_lower for kw in _DEPRIORITIZE)
+
+    # Priority 1: well-known orchestrator names
+    for name in ("start.sh", "main.sh", "run.sh", "launch.sh",
+                 "5_master_workflow.sh", "master_workflow.sh", "workflow.sh"):
         for s in scan["scripts"]:
             if s["name"] == name:
                 return s
-    # Fallback: the script that calls other scripts
+
+    # Priority 2: scripts with "master", "workflow", "pipeline" in name
     for s in scan["scripts"]:
+        name_lower = s["name"].lower()
+        if any(kw in name_lower for kw in ("master", "workflow", "pipeline")):
+            if not _is_deprioritized(s["name"]):
+                return s
+
+    # Priority 3: the script that calls the most other scripts (excluding deprioritized)
+    best = None
+    best_count = 0
+    for s in scan["scripts"]:
+        if _is_deprioritized(s["name"]):
+            continue
         content = s["content"]
         call_count = sum(1 for other in scan["scripts"]
                          if other["name"] != s["name"]
                          and other["name"] in content)
-        if call_count >= 2:
+        if call_count > best_count:
+            best_count = call_count
+            best = s
+    if best and best_count >= 2:
+        return best
+
+    # Priority 4: first non-deprioritized .sh script
+    for s in scan["scripts"]:
+        if s["name"].endswith(".sh") and not _is_deprioritized(s["name"]):
             return s
+
     return scan["scripts"][0] if scan["scripts"] else None
 
 
@@ -725,6 +755,34 @@ def init_plugin(
         build_mode = "build_around"
     else:
         build_mode = "glue_only"
+
+    # Override build mode using workflow graph: if the graph has compute
+    # stages with no scripts, the glue needs to orchestrate those stages
+    # (build_around), not just adapt input format (glue_only).
+    if build_mode == "glue_only":
+        try:
+            from .catalog import load_catalog
+            cat = load_catalog(plugins_root)
+            for pname, pentry in cat.get("plugins", {}).items():
+                wg = pentry.get("workflow_graph")
+                if not wg:
+                    continue
+                # Check if any graph node matches this plugin
+                plugin_name = plugin_dir.name
+                if pname != plugin_name and not pname.startswith(plugin_name[:15]):
+                    continue
+                # Count compute stages with no scripts
+                unscripted_compute = 0
+                for node in wg.get("nodes", []):
+                    if node.get("type") == "compute" and not node.get("scripts"):
+                        unscripted_compute += 1
+                if unscripted_compute > 0:
+                    build_mode = "build_around"
+                    print(f"  ℹ  Workflow graph shows {unscripted_compute} compute stage(s) "
+                          f"without scripts — upgrading to build_around mode")
+                break
+        except Exception:
+            pass
 
     mode_labels = {
         "full_build": "📦 Build entire workflow from library + README",
