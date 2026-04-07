@@ -1,0 +1,22 @@
+name: batch_submission_and_jobid_capture_slurm
+description: Submit a Slurm batch script and extract the numeric job ID from sbatch output.
+category: scheduler
+interface:
+  inputs:
+  - SBATCH_SCRIPT
+  - SBATCH_ARGS...
+  outputs:
+  - JOB_ID printed to stdout
+invariants:
+- 'Assumes sbatch prints: ''Submitted batch job <id>'' and job id is field 4.'
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 19
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Keep awk '{print $4}' unchanged to match Slurm default message.

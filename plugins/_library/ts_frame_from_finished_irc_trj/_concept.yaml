@@ -1,0 +1,25 @@
+name: ts_frame_from_finished_irc_trj
+description: Identify TS frame as the max-energy frame from a multi-XYZ trajectory stored as bytes.
+category: science
+interface:
+  inputs:
+  - file_bytes
+  outputs:
+  - ts_frame_idx(optional int)
+  - ts_energy(optional float)
+  - n_frames(int)
+invariants:
+- Energy is parsed from the first token of the XYZ comment line.
+- TS is defined as argmax energy ignoring NaNs.
+- Parsing stops when natoms line cannot be parsed as int.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 68
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Designed for finished_irc.trj inside zip archives.

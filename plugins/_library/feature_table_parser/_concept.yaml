@@ -1,0 +1,25 @@
+name: feature_table_parser
+description: Parse a whitespace-delimited feature table where header defines feature names and last column is label.
+category: adapters
+interface:
+  inputs:
+  - filename
+  - desire_feat_ind
+  outputs:
+  - data (np.array)
+  - label (np.array)
+  - features (list)
+invariants:
+- 'Header row: features are fields[2:-1] (skips name and linker columns).'
+- 'Labels are binarized: 0 stays 0, any nonzero becomes 1.'
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 38
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - ML/ML_all_model.py and ML/ML_single_model.py
+    notes: Used by both ML scripts.

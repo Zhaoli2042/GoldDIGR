@@ -1,0 +1,985 @@
+=== CONCEPT: directory_structure_mirroring ===
+Description: Mirror an input directory tree into a target directory (create all subdirectories).
+Category: adapters
+Invariants:
+  - "Run from a stable SOURCE_DIR; the relative paths produced by find must be preserved."
+  - "Use mkdir -p so reruns are idempotent."
+Interface_inputs: SOURCE_DIR, TARGET_DIR
+Interface_outputs: Target directory tree created to match source
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Must run on a filesystem where both SOURCE_DIR and TARGET_DIR are accessible.
+
+```bash
+#!/bin/bash
+# file: directory_structure_mirroring.sh
+
+SOURCE_DIR="{{SOURCE_DIR}}"
+TARGET_DIR="{{TARGET_DIR}}"
+
+cd "$SOURCE_DIR" && find . -type d -exec mkdir -p "$TARGET_DIR/{}" \;
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: zip_inventory_manifest ===
+Description: Generate a manifest mapping absolute ZIP paths to relative identifiers (without .zip).
+Category: adapters
+Invariants:
+  - "Manifest line format must remain: '<abs_zip_path>, <relative_path>' (comma+space) before downstream parsing."
+  - "Strip '.zip' suffix from both fields using sed 's/\\.zip$//'."
+Interface_inputs: SOURCE_DIR, MANIFEST_OUT
+Interface_outputs: MANIFEST_OUT file (two columns: abs path, relative path; both sans .zip)
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Downstream manager.sh trims a trailing comma from ZIP_PATH; keep the comma in column 1.
+
+```bash
+#!/bin/bash
+# file: zip_inventory_manifest.sh
+
+SOURCE_DIR="{{SOURCE_DIR}}"
+MANIFEST_OUT="{{MANIFEST_OUT}}"   # e.g., /path/to/file_list.txt
+
+find "$SOURCE_DIR" -name "*.zip" -printf "%p, %P\n" | sed 's/\.zip$//' > "$MANIFEST_OUT"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: idempotent_skip_if_output_exists ===
+Description: Skip work if the expected final artifact already exists.
+Category: submission
+Invariants:
+  - "Completion is defined solely by existence of OUTPUT_ROOT/<REL_PATH>_results.tar.gz."
+Interface_inputs: OUTPUT_ROOT, REL_PATH
+Interface_outputs: Exit code 0 if should skip; 1 if should proceed
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Use inside submission loops to make reruns safe.
+
+```bash
+#!/bin/bash
+# file: idempotent_skip_if_output_exists.sh
+
+OUTPUT_ROOT="{{OUTPUT_ROOT}}"
+REL_PATH="{{REL_PATH}}"
+
+FINAL_NAME="${REL_PATH}_results.tar.gz"
+if [ -f "$OUTPUT_ROOT/$FINAL_NAME" ]; then
+  echo "Skipping $REL_PATH: Output already exists."
+  exit 0
+fi
+
+exit 1
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: queue_throttling_slurm_by_jobname ===
+Description: Enforce a max number of concurrent jobs by polling Slurm queue and waiting.
+Category: scheduler
+Invariants:
+  - "Throttle condition is CURRENT_JOBS < MAX_JOBS."
+  - "Job counting uses squeue output filtered by a job-name substring; wrapper must set matching job name."
+Interface_inputs: USERNAME, JOBNAME_GREP, MAX_JOBS, CHECK_DELAY
+Interface_outputs: Blocks until under limit
+Scheduler: slurm
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: This is intentionally coupled to a job-name pattern (e.g., 'orca_wbo').
+
+```bash
+#!/bin/bash
+# file: queue_throttling_slurm_by_jobname.sh
+
+USERNAME="{{USERNAME}}"
+JOBNAME_GREP="{{JOBNAME_GREP}}"   # e.g., orca_wbo
+MAX_JOBS="{{MAX_JOBS}}"
+CHECK_DELAY="{{CHECK_DELAY}}"
+
+while true; do
+  CURRENT_JOBS=$(squeue -u "$USERNAME" -h | grep "$JOBNAME_GREP" | wc -l)
+
+  if [ "$CURRENT_JOBS" -lt "$MAX_JOBS" ]; then
+    break
+  else
+    echo "Queue full ($CURRENT_JOBS/$MAX_JOBS). Waiting ${CHECK_DELAY}s..."
+    sleep "$CHECK_DELAY"
+  fi
+done
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: batch_submission_and_jobid_capture_slurm ===
+Description: Submit a Slurm batch script and extract the numeric job ID from sbatch output.
+Category: scheduler
+Invariants:
+  - "Assumes sbatch prints: 'Submitted batch job <id>' and job id is field 4."
+Interface_inputs: SBATCH_SCRIPT, SBATCH_ARGS...
+Interface_outputs: JOB_ID printed to stdout
+Scheduler: slurm
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Keep awk '{print $4}' unchanged to match Slurm default message.
+
+```bash
+#!/bin/bash
+# file: batch_submission_and_jobid_capture_slurm.sh
+
+SBATCH_SCRIPT="{{SBATCH_SCRIPT}}"
+shift || true
+
+SBATCH_OUT=$(sbatch "$SBATCH_SCRIPT" "$@")
+JOB_ID=$(echo "$SBATCH_OUT" | awk '{print $4}')
+
+echo "$JOB_ID"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: submission_audit_trail_pipe_log ===
+Description: Append a pipe-delimited submission record for later auditing/resubmission.
+Category: monitoring
+Invariants:
+  - "Log format must be: 'timestamp | job_id | rel_path | zip_path' (pipe-delimited)."
+Interface_inputs: SUBMIT_LOG, JOB_ID, REL_PATH, ZIP_PATH
+Interface_outputs: Appended line in SUBMIT_LOG
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: audit.sh depends on this exact delimiter and field order.
+
+```bash
+#!/bin/bash
+# file: submission_audit_trail_pipe_log.sh
+
+SUBMIT_LOG="{{SUBMIT_LOG}}"
+JOB_ID="{{JOB_ID}}"
+REL_PATH="{{REL_PATH}}"
+ZIP_PATH="{{ZIP_PATH}}"
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') | $JOB_ID | $REL_PATH | $ZIP_PATH" >> "$SUBMIT_LOG"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: submission_manager_slurm_throttled ===
+Description: End-to-end manager loop: read manifest, skip completed, throttle, submit, and log.
+Category: scheduler
+Invariants:
+  - "INPUT_LIST lines are: '<ZIP_PATH>, <REL_PATH>' with ZIP_PATH possibly ending in a comma."
+  - "Completion check uses OUTPUT_ROOT/<REL_PATH>_results.tar.gz."
+  - "Throttle uses squeue -u USERNAME and grep JOBNAME_GREP."
+  - "Submission uses: sbatch {{SBATCH_WRAPPER}} ZIP_PATH REL_PATH OUTPUT_ROOT."
+Interface_inputs: INPUT_LIST, OUTPUT_ROOT, SUBMIT_LOG, MAX_JOBS, CHECK_DELAY, USERNAME, JOBNAME_GREP, SBATCH_WRAPPER
+Interface_outputs: Jobs submitted; SUBMIT_LOG updated
+Scheduler: slurm
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: This is the “SUBMISSION” block; it assumes an external Slurm wrapper exists.
+
+```bash
+#!/bin/bash
+# file: submission_manager_slurm_throttled.sh
+
+MAX_JOBS="{{MAX_JOBS}}"
+CHECK_DELAY="{{CHECK_DELAY}}"
+INPUT_LIST="{{INPUT_LIST}}"
+OUTPUT_ROOT="{{OUTPUT_ROOT}}"
+SUBMIT_LOG="{{SUBMIT_LOG}}"
+USERNAME="{{USERNAME}}"
+JOBNAME_GREP="{{JOBNAME_GREP}}"
+SBATCH_WRAPPER="{{SBATCH_WRAPPER}}"   # e.g., slurm_job.sb
+
+mkdir -p logs
+mkdir -p "$OUTPUT_ROOT"
+
+echo "Starting manager..."
+echo "Logging submissions to $SUBMIT_LOG"
+
+while read -r ZIP_PATH REL_PATH; do
+  ZIP_PATH=${ZIP_PATH%,}
+  [[ "$ZIP_PATH" =~ ^#.*$ ]] && continue
+  [ -z "$ZIP_PATH" ] && continue
+
+  FINAL_NAME="${REL_PATH}_results.tar.gz"
+  if [ -f "$OUTPUT_ROOT/$FINAL_NAME" ]; then
+    echo "Skipping $REL_PATH: Output already exists."
+    continue
+  fi
+
+  while true; do
+    CURRENT_JOBS=$(squeue -u "$USERNAME" -h | grep "$JOBNAME_GREP" | wc -l)
+    if [ "$CURRENT_JOBS" -lt "$MAX_JOBS" ]; then
+      break
+    else
+      echo "Queue full ($CURRENT_JOBS/$MAX_JOBS). Waiting ${CHECK_DELAY}s..."
+      sleep "$CHECK_DELAY"
+    fi
+  done
+
+  echo "Submitting: $REL_PATH"
+  SBATCH_OUT=$(sbatch "$SBATCH_WRAPPER" "$ZIP_PATH" "$REL_PATH" "$OUTPUT_ROOT")
+  JOB_ID=$(echo "$SBATCH_OUT" | awk '{print $4}')
+
+  echo "$(date '+%Y-%m-%d %H:%M:%S') | $JOB_ID | $REL_PATH | $ZIP_PATH" >> "$SUBMIT_LOG"
+  sleep 1
+done < "$INPUT_LIST"
+
+echo "All jobs submitted."
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: submission_log_contract_parser ===
+Description: Parse the pipe-delimited submitted_jobs.log contract used for auditing.
+Category: monitoring
+Invariants:
+  - "Input records are pipe-delimited: TIMESTAMP|JOB_ID|REL_PATH|ZIP_PATH."
+  - "Fields may contain extra spaces; must xargs-trim REL_PATH/JOB_ID/ZIP_PATH."
+Interface_inputs: SUBMIT_LOG
+Interface_outputs: Emits parsed fields per line (TIMESTAMP JOB_ID REL_PATH ZIP_PATH)
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Used as a building block for audit/resubmit tooling.
+
+```bash
+#!/bin/bash
+# file: submission_log_contract_parser.sh
+
+SUBMIT_LOG="{{SUBMIT_LOG}}"
+
+while IFS="|" read -r TIMESTAMP JOB_ID REL_PATH ZIP_PATH; do
+  REL_PATH=$(echo "$REL_PATH" | xargs)
+  JOB_ID=$(echo "$JOB_ID" | xargs)
+  ZIP_PATH=$(echo "$ZIP_PATH" | xargs)
+
+  echo "$TIMESTAMP $JOB_ID $REL_PATH $ZIP_PATH"
+done < "$SUBMIT_LOG"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: scheduler_query_slurm_squeue_job_present ===
+Description: Determine whether a Slurm job ID is still present (RUNNING/PENDING) in the queue.
+Category: scheduler
+Invariants:
+  - "Uses: squeue -j <jobid> -h | grep -q <jobid>."
+Interface_inputs: JOB_ID
+Interface_outputs: Exit code 0 if present; 1 if not present
+Scheduler: slurm
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: squeue errors are suppressed to avoid noisy audits.
+
+```bash
+#!/bin/bash
+# file: scheduler_query_slurm_squeue_job_present.sh
+
+JOB_ID="{{JOB_ID}}"
+
+if squeue -j "$JOB_ID" -h 2>/dev/null | grep -q "$JOB_ID"; then
+  exit 0
+else
+  exit 1
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: completion_signal_by_artifact ===
+Description: Define completion by presence of a single expected tarball artifact.
+Category: monitoring
+Invariants:
+  - "Artifact name is derived as: ${REL_PATH}_results.tar.gz."
+Interface_inputs: OUTPUT_ROOT, REL_PATH
+Interface_outputs: Exit code 0 if complete; 1 if missing
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: This is the contract shared by manager.sh and audit.sh.
+
+```bash
+#!/bin/bash
+# file: completion_signal_by_artifact.sh
+
+OUTPUT_ROOT="{{OUTPUT_ROOT}}"
+REL_PATH="{{REL_PATH}}"
+
+FINAL_NAME="${REL_PATH}_results.tar.gz"
+[ -f "$OUTPUT_ROOT/$FINAL_NAME" ]
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: failure_list_for_retry ===
+Description: Emit a retry list in the exact format expected by the submission manager: '<ZIP_PATH> <REL_PATH>'.
+Category: monitoring
+Invariants:
+  - "Each line must be: ZIP_PATH<space>REL_PATH (no pipes, no commas)."
+Interface_inputs: FAILED_LOG, ZIP_PATH, REL_PATH
+Interface_outputs: Appended retry line
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: audit.sh writes this for downstream resubmission tooling.
+
+```bash
+#!/bin/bash
+# file: failure_list_for_retry.sh
+
+FAILED_LOG="{{FAILED_LOG}}"
+ZIP_PATH="{{ZIP_PATH}}"
+REL_PATH="{{REL_PATH}}"
+
+echo "$ZIP_PATH $REL_PATH" >> "$FAILED_LOG"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: audit_submitted_jobs_slurm ===
+Description: Audit submitted jobs by checking completion artifact and querying Slurm; write failed_jobs.txt for retry.
+Category: monitoring
+Invariants:
+  - "Reads SUBMIT_LOG with pipe-delimited contract."
+  - "Completion is OUTPUT_ROOT/<REL_PATH>_results.tar.gz."
+  - "If artifact missing and job not in squeue => mark FAILED and write '<ZIP_PATH> <REL_PATH>'."
+Interface_inputs: OUTPUT_ROOT, SUBMIT_LOG, FAILED_LOG
+Interface_outputs: FAILED_LOG populated with retry lines
+Scheduler: slurm
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: This is the “HEALTH MONITOR” block for the workflow (detect failed/crashed).
+
+```bash
+#!/bin/bash
+# file: audit_submitted_jobs_slurm.sh
+
+OUTPUT_ROOT="{{OUTPUT_ROOT}}"
+SUBMIT_LOG="{{SUBMIT_LOG}}"
+FAILED_LOG="{{FAILED_LOG}}"
+
+echo "Auditing submitted jobs..."
+
+> "$FAILED_LOG"
+
+while IFS="|" read -r TIMESTAMP JOB_ID REL_PATH ZIP_PATH; do
+  REL_PATH=$(echo "$REL_PATH" | xargs)
+  JOB_ID=$(echo "$JOB_ID" | xargs)
+  ZIP_PATH=$(echo "$ZIP_PATH" | xargs)
+
+  FINAL_NAME="${REL_PATH}_results.tar.gz"
+
+  if [ ! -f "$OUTPUT_ROOT/$FINAL_NAME" ]; then
+    if squeue -j "$JOB_ID" -h 2>/dev/null | grep -q "$JOB_ID"; then
+      echo "-> Job $JOB_ID ($REL_PATH) is still RUNNING or PENDING."
+    else
+      echo "-> FAILED/CRASHED: Job $JOB_ID ($REL_PATH)"
+      echo "$ZIP_PATH $REL_PATH" >> "$FAILED_LOG"
+    fi
+  fi
+done < "$SUBMIT_LOG"
+
+echo "----------------------------------------"
+echo "Audit complete."
+echo "Any crashed/failed jobs have been written to $FAILED_LOG."
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: charge_multiplicity_from_filename ===
+Description: Parse charge and multiplicity from a ZIP basename tokenized by underscores.
+Category: science
+Invariants:
+  - "Filename convention: <id>_<charge>_<multiplicity>.zip; charge is NF-1 and mult is NF."
+Interface_inputs: ZIP_PATH
+Interface_outputs: CHARGE, MULT printed as 'CHARGE=<...> MULT=<...>' (or exportable vars)
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Assumes no extra underscore tokens after multiplicity.
+
+```bash
+#!/bin/bash
+# file: charge_multiplicity_from_filename.sh
+
+ZIP_ARGUMENT="{{ZIP_PATH}}"
+
+ZIP_FILENAME=$(basename "$ZIP_ARGUMENT")
+ZIP_BASENAME=$(basename "$ZIP_FILENAME" .zip)
+
+CHARGE=$(echo "$ZIP_BASENAME" | awk -F_ '{print $(NF-1)}')
+MULT=$(echo "$ZIP_BASENAME" | awk -F_ '{print $NF}')
+
+echo "CHARGE=$CHARGE MULT=$MULT"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: mpi_env_orca_ompi_overrides ===
+Description: Set OMPI and library environment variables used to run ORCA/MPI in this workflow runtime.
+Category: compute
+Invariants:
+  - "Preserve OMPI_MCA_* overrides that disable UCX and force tcp/vader to avoid transport issues."
+  - "ORCA and Multiwfn paths are assumed under /opt."
+Interface_inputs: none
+Interface_outputs: Environment variables exported in current shell
+Scheduler: any
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Intended to be sourced at job start (inside container or preinstalled runtime).
+
+```bash
+#!/bin/bash
+# file: mpi_env_orca_ompi_overrides.sh
+
+export PATH="/opt/orca:/opt/Multiwfn_bin:${PATH}"
+export LD_LIBRARY_PATH="/opt/orca:${LD_LIBRARY_PATH}"
+
+export OMPI_MCA_pml="ob1"
+export OMPI_MCA_btl="self,vader,tcp"
+export OMPI_MCA_mtl="^ucx"
+export OMPI_MCA_osc="^ucx"
+export OMPI_MCA_btl_vader_single_copy_mechanism=none
+export OMPI_MCA_rmaps_base_oversubscribe=1
+export OMPI_MCA_hwloc_base_binding_policy=none
+export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: watchdog_walltime_kill_orca ===
+Description: Wall-time watchdog that kills ORCA processes near the end of allocation.
+Category: monitoring
+Invariants:
+  - "WATCHDOG_DELAY = WALL_SECONDS - WATCHDOG_BUFFER."
+  - "Kill sequence: pkill (soft) then pkill -9 after 5s."
+  - "Trap EXIT to stop watchdog cleanly."
+Interface_inputs: WALL_SECONDS, WATCHDOG_BUFFER
+Interface_outputs: Background watchdog process; kills ORCA near walltime
+Scheduler: any
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Designed for single-node jobs where pkill -f is acceptable.
+
+```bash
+#!/bin/bash
+# file: watchdog_walltime_kill_orca.sh
+
+WALL_SECONDS=${WALL_SECONDS:-86400}
+WATCHDOG_BUFFER="{{WATCHDOG_BUFFER}}"   # e.g., 900
+
+WATCHDOG_DELAY=$((WALL_SECONDS - WATCHDOG_BUFFER))
+WATCHDOG_PID=""
+
+start_watchdog() {
+  (
+    sleep "$WATCHDOG_DELAY"
+    echo -e "\n========================================"
+    echo "WATCHDOG: Wall time limit approaching! Killing ORCA..."
+    echo "========================================"
+    pkill -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -f "orca_" 2>/dev/null || true
+    sleep 5
+    pkill -9 -f "/opt/orca/orca" 2>/dev/null || true
+  ) &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
+}
+
+trap 'stop_watchdog' EXIT
+start_watchdog
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: walltime_remaining_and_buffer_gate ===
+Description: Track elapsed time and provide a gate function to decide whether there is enough time to start another task.
+Category: monitoring
+Invariants:
+  - "have_time returns success only if remaining > BUFFER_SECONDS."
+Interface_inputs: WALL_SECONDS, BUFFER_SECONDS
+Interface_outputs: Functions: time_remaining, have_time
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Must set START_TIME at beginning of job.
+
+```bash
+#!/bin/bash
+# file: walltime_remaining_and_buffer_gate.sh
+
+WALL_SECONDS=${WALL_SECONDS:-86400}
+BUFFER_SECONDS=${BUFFER_SECONDS:-3600}
+START_TIME=$(date +%s)
+
+time_remaining() {
+  local now=$(date +%s)
+  local elapsed=$((now - START_TIME))
+  echo $((WALL_SECONDS - elapsed))
+}
+
+have_time() {
+  local remaining
+  remaining=$(time_remaining)
+  if [ "$remaining" -gt "$BUFFER_SECONDS" ]; then return 0; else return 1; fi
+}
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: round2_skiplist_loader ===
+Description: Load skip.txt into an associative array to skip already-completed molecules in a second round.
+Category: monitoring
+Invariants:
+  - "skip.txt is line-oriented; trim whitespace with xargs; ignore empty lines."
+Interface_inputs: SKIP_FILE
+Interface_outputs: Declares/prints skip entries; sets SKIP_MOLECULES assoc array in current shell
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Requires bash associative arrays.
+
+```bash
+#!/bin/bash
+# file: round2_skiplist_loader.sh
+
+SKIP_FILE="{{SKIP_FILE}}"   # e.g., skip.txt
+
+declare -A SKIP_MOLECULES
+if [ -f "$SKIP_FILE" ]; then
+  echo "-> Found skip.txt (round-2 mode)"
+  while IFS= read -r mol_name || [ -n "$mol_name" ]; do
+    mol_name=$(echo "$mol_name" | xargs)
+    [ -n "$mol_name" ] && SKIP_MOLECULES["$mol_name"]=1 && echo "   Skipping: $mol_name"
+  done < "$SKIP_FILE"
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: orca_input_template_generation ===
+Description: Generate an ORCA single-point .inp file for a given XYZ with fixed method/basis and resource settings.
+Category: science
+Invariants:
+  - "Keep method line and blocks exactly as used: wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer."
+  - "Keep %pal nproc 4 end and %maxcore 1500 as the resource contract with the scheduler wrapper."
+  - "Use '*xyzfile CHARGE MULT XYZ_FILE' (not inline coordinates)."
+Interface_inputs: MOL, CHARGE, MULT, XYZ_FILE
+Interface_outputs: Writes ${MOL}.inp
+Scheduler: any
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Assumes XYZ_FILE exists in CWD.
+
+```bash
+#!/bin/bash
+# file: orca_input_template_generation.sh
+
+MOL="{{MOL}}"
+CHARGE="{{CHARGE}}"
+MULT="{{MULT}}"
+XYZ_FILE="{{XYZ_FILE}}"
+
+cat > "${MOL}.inp" <<EOF
+! wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer
+%scf MaxIter 500 end
+%pal nproc 4 end
+%maxcore 1500
+%base "${MOL}"
+*xyzfile ${CHARGE} ${MULT} ${XYZ_FILE}
+EOF
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: science_driver_orca_run_and_classify ===
+Description: Run ORCA on an input file, classify failure as timeout-killed vs generic failure, and clean intermediates on failure.
+Category: science
+Invariants:
+  - "ORCA invocation path is /opt/orca/orca."
+  - "Timeout classification uses: time_remaining < WATCHDOG_BUFFER."
+  - "On failure, remove heavy intermediates: *.gbw *.vpot *.dens *.tmp *.cis *.tx *.opt."
+Interface_inputs: MOL, WATCHDOG_BUFFER
+Interface_outputs: ORCA_EXIT code; prints status token to stdout
+Scheduler: any
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Requires time_remaining() function in scope (from walltime_remaining_and_buffer_gate).
+
+```bash
+#!/bin/bash
+# file: science_driver_orca_run_and_classify.sh
+
+MOL="{{MOL}}"
+WATCHDOG_BUFFER="{{WATCHDOG_BUFFER}}"  # e.g., 900
+
+/opt/orca/orca "${MOL}.inp" > "${MOL}.out"
+ORCA_EXIT=$?
+
+if [ $ORCA_EXIT -ne 0 ]; then
+  if [ "$(time_remaining)" -lt "$WATCHDOG_BUFFER" ]; then
+    echo "timeout_killed"
+  else
+    echo "orca_failed"
+  fi
+  rm -f *.gbw *.vpot *.dens *.tmp *.cis *.tx *.opt
+  exit 1
+fi
+
+echo "orca_ok"
+exit 0
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: multiwfn_batch_mode_bond_orders ===
+Description: Run Multiwfn_noGUI scripted menus to compute Mayer/Wiberg/Fuzzy bond order matrices from ORCA molden file.
+Category: science
+Invariants:
+  - "Requires ${MOL}.gbw to exist; generates molden via orca_2mkl."
+  - "Menu scripts must remain exactly: 9/1, 9/3, 9/7 sequences with 'y', '0', 'q'."
+  - "Multiwfn writes bndmat.txt; must be renamed after each run."
+Interface_inputs: MOL
+Interface_outputs: ${MOL}_mayer_mat.txt, ${MOL}_wiberg_mat.txt, ${MOL}_fuzzy_mat.txt and corresponding *_log.out
+Scheduler: any
+Tool: multiwfn
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Assumes Multiwfn_noGUI is on PATH and orca_2mkl at /opt/orca/orca_2mkl.
+
+```bash
+#!/bin/bash
+# file: multiwfn_batch_mode_bond_orders.sh
+
+MOL="{{MOL}}"
+
+if [ -f "${MOL}.gbw" ]; then
+  /opt/orca/orca_2mkl "${MOL}" -molden > /dev/null 2>&1
+  if [ -f "${MOL}.molden.input" ]; then
+    printf "9\n1\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_mayer_log.out" 2>/dev/null
+    [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_mayer_mat.txt"
+
+    printf "9\n3\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_wiberg_log.out" 2>/dev/null
+    [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_wiberg_mat.txt"
+
+    printf "9\n7\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_fuzzy_log.out" 2>/dev/null
+    [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_fuzzy_mat.txt"
+
+    exit 0
+  else
+    exit 2
+  fi
+else
+  exit 3
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: status_json_manifest ===
+Description: Write a machine-readable status.json summarizing per-molecule statuses and overall completion/partial.
+Category: monitoring
+Invariants:
+  - "overall status is 'partial' if TIMEOUT_COUNT > 0 else 'complete'."
+  - "Per-molecule statuses are string values keyed by molecule name."
+Interface_inputs: ZIP_FILENAME, COMPLETE_COUNT, TIMEOUT_COUNT, MOLECULES[], MOL_STATUS[]
+Interface_outputs: status.json
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Requires bash arrays/assoc arrays in scope.
+
+```bash
+#!/bin/bash
+# file: status_json_manifest.sh
+
+ZIP_FILENAME="{{ZIP_FILENAME}}"
+COMPLETE_COUNT="{{COMPLETE_COUNT}}"
+TIMEOUT_COUNT="{{TIMEOUT_COUNT}}"
+
+# expects: MOLECULES bash array and MOL_STATUS assoc array already defined
+
+OVERALL_STATUS="complete"
+[ "$TIMEOUT_COUNT" -gt 0 ] && OVERALL_STATUS="partial"
+
+cat > status.json <<STATUSEOF
+{
+  "zip_file": "$ZIP_FILENAME",
+  "status": "$OVERALL_STATUS",
+  "completed": $COMPLETE_COUNT,
+  "timeout_skipped": $TIMEOUT_COUNT,
+  "molecules": {
+$(FIRST=1; for MOL in "${MOLECULES[@]}"; do
+    [ $FIRST -eq 1 ] && FIRST=0 || echo ","
+    echo -n "    \"$MOL\": \"${MOL_STATUS[$MOL]:-unknown}\""
+done)
+  }
+}
+STATUSEOF
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: result_packaging_tarball ===
+Description: Package selected outputs into a gzipped tarball using null-delimited file list.
+Category: adapters
+Invariants:
+  - "Use find -print0 and tar --null -T - to safely handle filenames."
+  - "Include exactly: *.out, *.xyz, *.inp, *_mat.txt, *_log.out, status.json."
+Interface_inputs: WORKDIR (implicit CWD)
+Interface_outputs: results.tar.gz
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: Produces results.tar.gz in current directory; external wrapper may rename/move it.
+
+```bash
+#!/bin/bash
+# file: result_packaging_tarball.sh
+
+echo -e "\nPacking results..."
+find . -maxdepth 1 \( -name "*.out" -o -name "*.xyz" -o -name "*.inp" -o -name "*_mat.txt" -o -name "*_log.out" -o -name "status.json" \) -print0 \
+  | tar -czf results.tar.gz --null -T -
+echo "Done."
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: task_wrapper_orca_multiwfn_per_zip ===
+Description: Per-archive task wrapper: unzip geometries, run ORCA+Multiwfn over a fixed geometry list with walltime-aware partial completion, emit status.json, and pack results.
+Category: science
+Invariants:
+  - "ZIP must be present in CWD because unzip uses ZIP_FILENAME (basename only)."
+  - "Geometry processing order and names must remain: finished_last, finished_last_opt, ts_final_geometry, finished_first, finished_first_opt, input."
+  - "Skiplist contract: skip.txt lines are molecule names; status 'complete_previous_round'."
+  - "Timeout behavior: if remaining time <= BUFFER_SECONDS, skip current and all remaining molecules."
+  - "ORCA input template and Multiwfn menu scripts must remain unchanged."
+Interface_inputs: ZIP_ARGUMENT, WALL_SECONDS (optional), BUFFER_SECONDS (optional)
+Interface_outputs: results.tar.gz, status.json, per-molecule outputs in tarball
+Scheduler: any
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr_orca_multiwfn_anvil
+Notes: This is the “TASK WRAPPER + SCIENCE DRIVER + WATCHDOG + ROUND2 + RESULT BACKUP(manifest)” combined as originally tested; keep as-is.
+
+```bash
+#!/bin/bash
+# file: task_wrapper_orca_multiwfn_per_zip.sh
+# (verbatim from run_orca_wbo_anvil.sh with placeholders only)
+
+ZIP_ARGUMENT=$1
+
+if [ -z "$ZIP_ARGUMENT" ]; then
+    echo "Error: No zip file provided."
+    exit 1
+fi
+
+ZIP_FILENAME=$(basename "$ZIP_ARGUMENT")
+ZIP_BASENAME=$(basename "$ZIP_FILENAME" .zip)
+
+CHARGE=$(echo "$ZIP_BASENAME" | awk -F_ '{print $(NF-1)}')
+MULT=$(echo "$ZIP_BASENAME" | awk -F_ '{print $NF}')
+
+echo "Processing $ZIP_FILENAME"
+echo "-> Extracted Metadata: Charge=$CHARGE, Multiplicity=$MULT"
+
+export PATH="/opt/orca:/opt/Multiwfn_bin:${PATH}"
+export LD_LIBRARY_PATH="/opt/orca:${LD_LIBRARY_PATH}"
+
+export OMPI_MCA_pml="ob1"
+export OMPI_MCA_btl="self,vader,tcp"
+export OMPI_MCA_mtl="^ucx"
+export OMPI_MCA_osc="^ucx"
+export OMPI_MCA_btl_vader_single_copy_mechanism=none
+export OMPI_MCA_rmaps_base_oversubscribe=1
+export OMPI_MCA_hwloc_base_binding_policy=none
+export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
+
+WALL_SECONDS=${WALL_SECONDS:-86400}
+BUFFER_SECONDS=${BUFFER_SECONDS:-3600}
+WATCHDOG_BUFFER=900
+START_TIME=$(date +%s)
+
+time_remaining() {
+    local now=$(date +%s)
+    local elapsed=$((now - START_TIME))
+    echo $((WALL_SECONDS - elapsed))
+}
+
+have_time() {
+    local remaining=$(time_remaining)
+    if [ "$remaining" -gt "$BUFFER_SECONDS" ]; then return 0; else return 1; fi
+}
+
+WATCHDOG_DELAY=$((WALL_SECONDS - WATCHDOG_BUFFER))
+WATCHDOG_PID=""
+
+start_watchdog() {
+    (
+        sleep "$WATCHDOG_DELAY"
+        echo -e "\n========================================"
+        echo "WATCHDOG: Wall time limit approaching! Killing ORCA..."
+        echo "========================================"
+        pkill -f "/opt/orca/orca" 2>/dev/null || true
+        pkill -f "orca_" 2>/dev/null || true
+        sleep 5
+        pkill -9 -f "/opt/orca/orca" 2>/dev/null || true
+    ) &
+    WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+    if [ -n "$WATCHDOG_PID" ]; then
+        kill "$WATCHDOG_PID" 2>/dev/null || true
+        wait "$WATCHDOG_PID" 2>/dev/null || true
+        WATCHDOG_PID=""
+    fi
+}
+trap 'stop_watchdog' EXIT
+start_watchdog
+
+unzip -q -j "$ZIP_FILENAME"
+
+declare -A SKIP_MOLECULES
+if [ -f "skip.txt" ]; then
+    echo "-> Found skip.txt (round-2 mode)"
+    while IFS= read -r mol_name || [ -n "$mol_name" ]; do
+        mol_name=$(echo "$mol_name" | xargs)
+        [ -n "$mol_name" ] && SKIP_MOLECULES["$mol_name"]=1 && echo "   Skipping: $mol_name"
+    done < skip.txt
+fi
+
+MOLECULES=("finished_last" "finished_last_opt" "ts_final_geometry" "finished_first" "finished_first_opt" "input")
+MISSING_COUNT=0; COMPLETE_COUNT=0; TIMEOUT_COUNT=0; TIMED_OUT=0
+declare -A MOL_STATUS
+
+for MOL in "${MOLECULES[@]}"; do
+    XYZ_FILE="${MOL}.xyz"
+
+    if [ -n "${SKIP_MOLECULES[$MOL]+x}" ]; then
+        MOL_STATUS["$MOL"]="complete_previous_round"
+        COMPLETE_COUNT=$((COMPLETE_COUNT + 1))
+        continue
+    fi
+
+    if [ "$TIMED_OUT" -eq 1 ]; then
+        MOL_STATUS["$MOL"]="timeout_skipped"; TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1)); continue
+    fi
+
+    if ! have_time; then
+        echo -e "\nTIMEOUT: Skipping $MOL and remaining molecules."
+        MOL_STATUS["$MOL"]="timeout_skipped"; TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1)); TIMED_OUT=1; continue
+    fi
+
+    if [ -f "$XYZ_FILE" ]; then
+        echo "--- Starting ${MOL} ---"
+
+        cat > "${MOL}.inp" <<EOF
+! wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer
+%scf MaxIter 500 end
+%pal nproc 4 end
+%maxcore 1500
+%base "${MOL}"
+*xyzfile ${CHARGE} ${MULT} ${XYZ_FILE}
+EOF
+
+        /opt/orca/orca "${MOL}.inp" > "${MOL}.out"
+        ORCA_EXIT=$?
+
+        if [ $ORCA_EXIT -ne 0 ]; then
+            if [ $(time_remaining) -lt "$WATCHDOG_BUFFER" ]; then
+                MOL_STATUS["$MOL"]="timeout_killed"; TIMEOUT_COUNT=$((TIMEOUT_COUNT + 1)); TIMED_OUT=1
+            else
+                MOL_STATUS["$MOL"]="orca_failed"
+            fi
+            rm -f *.gbw *.vpot *.dens *.tmp *.cis *.tx *.opt
+            continue
+        fi
+
+        if [ -f "${MOL}.gbw" ]; then
+            /opt/orca/orca_2mkl "${MOL}" -molden > /dev/null 2>&1
+            if [ -f "${MOL}.molden.input" ]; then
+                printf "9\n1\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_mayer_log.out" 2>/dev/null
+                [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_mayer_mat.txt"
+
+                printf "9\n3\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_wiberg_log.out" 2>/dev/null
+                [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_wiberg_mat.txt"
+
+                printf "9\n7\ny\n0\nq\n" | Multiwfn_noGUI "${MOL}.molden.input" > "${MOL}_fuzzy_log.out" 2>/dev/null
+                [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_fuzzy_mat.txt"
+
+                MOL_STATUS["$MOL"]="complete"
+                COMPLETE_COUNT=$((COMPLETE_COUNT + 1))
+            else
+                MOL_STATUS["$MOL"]="molden_failed"
+            fi
+        else
+            MOL_STATUS["$MOL"]="orca_no_gbw"
+        fi
+
+        rm -f *.gbw *.vpot *.dens *.tmp *.cis *.tx *.opt *.molden.input
+    else
+        echo "Warning: $XYZ_FILE not found, skipping."
+        MOL_STATUS["$MOL"]="missing"; MISSING_COUNT=$((MISSING_COUNT + 1))
+    fi
+done
+stop_watchdog
+
+OVERALL_STATUS="complete"
+[ "$TIMEOUT_COUNT" -gt 0 ] && OVERALL_STATUS="partial"
+
+cat > status.json <<STATUSEOF
+{
+  "zip_file": "$ZIP_FILENAME",
+  "status": "$OVERALL_STATUS",
+  "completed": $COMPLETE_COUNT,
+  "timeout_skipped": $TIMEOUT_COUNT,
+  "molecules": {
+$(FIRST=1; for MOL in "${MOLECULES[@]}"; do
+    [ $FIRST -eq 1 ] && FIRST=0 || echo ","
+    echo -n "    \"$MOL\": \"${MOL_STATUS[$MOL]:-unknown}\""
+done)
+  }
+}
+STATUSEOF
+
+echo -e "\nPacking results..."
+find . -maxdepth 1 \( -name "*.out" -o -name "*.xyz" -o -name "*.inp" -o -name "*_mat.txt" -o -name "*_log.out" -o -name "status.json" \) -print0 | tar -czf results.tar.gz --null -T -
+echo "Done."
+```
+
+=== END CONCEPT ===

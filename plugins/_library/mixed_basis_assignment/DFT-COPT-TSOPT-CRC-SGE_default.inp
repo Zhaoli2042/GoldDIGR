@@ -1,0 +1,38 @@
+# ── SNIPPET: mixed_basis_assignment/DFT-COPT-TSOPT-CRC-SGE_default ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      {{PLUGIN_NAME}}
+# Invariants:
+#   - High basis atoms = metal_indices ∪ reactive_atoms.
+#   - Low basis atoms = all atoms minus high basis atoms.
+# Notes: Basis names come from config['orca'].
+# ────────────────────────────────────────────────────────────
+
+from typing import List, Set, Dict, Any
+
+def assign_basis_sets(elements: List[str], metal_indices: Set[int],
+                      reactive_atoms: Set[int], config: Dict[str, Any]) -> Dict[str, Set[int]]:
+    """
+    Assign basis sets to atoms.
+    High basis (def2-TZVP): metal atoms + reactive atoms (from sigma bond changes)
+    Low basis (def2-SVP): everything else
+    """
+    orca_settings = get_orca_settings(config)
+    basis_high = orca_settings.get("basis_high", "def2-TZVP")
+    basis_low = orca_settings.get("basis_low", "def2-SVP")
+
+    high_basis_atoms = metal_indices | reactive_atoms
+    low_basis_atoms = set(range(len(elements))) - high_basis_atoms
+
+    print(f"  Basis set assignment:")
+    print(f"    High basis ({basis_high}): {len(high_basis_atoms)} atoms")
+    print(f"      Metals: {sorted(metal_indices)}")
+    print(f"      Reactive: {sorted(reactive_atoms - metal_indices)}")
+    print(f"    Low basis ({basis_low}): {len(low_basis_atoms)} atoms")
+
+    return {
+        'high': high_basis_atoms,
+        'low': low_basis_atoms,
+        'basis_high': basis_high,
+        'basis_low': basis_low
+    }

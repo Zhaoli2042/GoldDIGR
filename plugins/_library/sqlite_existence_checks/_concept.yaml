@@ -1,0 +1,24 @@
+name: sqlite_existence_checks
+description: "Schema-specific \u201Cdoes this record exist?\u201D helpers using SELECT count(1)."
+category: adapters
+interface:
+  inputs:
+  - connection
+  - record
+  - ID
+  outputs:
+  - bool
+invariants:
+- If ID is provided, check by id; else require specific keys in record dict.
+- Abort (exit) if required keys are missing.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 34
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions_db.py
+    notes: Includes check_perovskite_A, check_body, check_ligand, check_fingerprint.

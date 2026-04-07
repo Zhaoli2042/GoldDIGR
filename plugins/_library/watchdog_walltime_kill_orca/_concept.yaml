@@ -1,0 +1,36 @@
+name: watchdog_walltime_kill_orca
+description: Wall-time watchdog that kills ORCA processes near the end of allocation.
+category: monitoring
+interface:
+  inputs:
+  - WALL_SECONDS
+  - WATCHDOG_BUFFER
+  outputs:
+  - Background watchdog process; kills ORCA near walltime
+invariants:
+- Always stop watchdog on exit via trap.
+- Trap EXIT to stop watchdog cleanly.
+- Watchdog fires at WALL_SECONDS - WATCHDOG_BUFFER and kills /opt/orca/orca and orca_ MPI children.
+- 'Kill sequence: pkill (soft) then pkill -9 after 5s.'
+- WATCHDOG_DELAY = WALL_SECONDS - WATCHDOG_BUFFER.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.inp
+    lines: 44
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Designed for single-node jobs where pkill -f is acceptable.
+  background_watchdog_kill_orca_near_wall_limit_for_partial_pack:
+    file: background_watchdog_kill_orca_near_wall_limit_for_partial_pack.inp
+    lines: 41
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - golddigr
+    notes: From run_orca_wbo.sh watchdog section.

@@ -1,0 +1,47 @@
+name: task_wrapper_orca_multiwfn_per_zip
+description: 'Per-archive task wrapper: unzip geometries, run ORCA+Multiwfn over a fixed geometry list with walltime-aware
+  partial completion, emit status.json, and pack results.'
+category: science
+interface:
+  inputs:
+  - ZIP_ARGUMENT
+  - WALL_SECONDS (optional)
+  - BUFFER_SECONDS (optional)
+  outputs:
+  - results.tar.gz
+  - status.json
+  - per-molecule outputs in tarball
+invariants:
+- ZIP must be present in CWD because unzip uses ZIP_FILENAME (basename only).
+- 'Skiplist contract: skip.txt lines are molecule names; status ''complete_previous_round''.'
+- 'Timeout behavior: if remaining time <= BUFFER_SECONDS, skip current and all remaining molecules.'
+- 'Processes molecules in fixed order and expects XYZ names: finished_last, finished_last_opt, ts_final_geometry, finished_first,
+  finished_first_opt, input.'
+- 'Geometry processing order and names must remain: finished_last, finished_last_opt, ts_final_geometry, finished_first, finished_first_opt,
+  input.'
+- ORCA input template and Multiwfn menu scripts must remain unchanged.
+- After each molecule, remove heavy ORCA artifacts (*.gbw, *.dens, etc.) to reduce disk usage.
+- If ORCA exits nonzero near wall limit, treat as timeout_killed and stop further work.
+- Always ends by writing status.json and packing results.tar.gz.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.inp
+    lines: 196
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: "This is the \u201CTASK WRAPPER + SCIENCE DRIVER + WATCHDOG + ROUND2 + RESULT BACKUP(manifest)\u201D combined as\
+      \ originally tested; keep as-is."
+  per_zip_wrapper_unzip_run_orca_2mkl_multiwfn_clean_pack_with_status:
+    file: per_zip_wrapper_unzip_run_orca_2mkl_multiwfn_clean_pack_with_status.sh
+    lines: 265
+    scheduler: htcondor
+    tool: orca | multiwfn
+    infrastructure:
+      filesystem: htcondor_transfer
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: 'This is the full tested run_orca_wbo.sh as provided (including known issue: unzip uses basename).'

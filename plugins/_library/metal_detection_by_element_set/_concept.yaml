@@ -1,0 +1,23 @@
+name: metal_detection_by_element_set
+description: Detect metal atoms by membership in a predefined element set; optionally find neighbors by distance.
+category: science
+interface:
+  inputs:
+  - xyz_path
+  outputs:
+  - (metal_indices_set
+  - neighbor_indices_set)
+invariants:
+- Metal detection uses element symbol capitalization and membership in METALS set.
+- "Neighbor detection uses a fixed 3.0 \xC5 cutoff and is informational only."
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 47
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Neighbor indices are not used for reactive atom selection in this pipeline.

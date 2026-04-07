@@ -1,0 +1,30 @@
+name: auto3d_single_smiles_fallback_runner
+description: Run Auto3D for a single SMILES and write results into out_path/results using PREFIX-based filenames.
+category: science
+interface:
+  inputs:
+  - smiles
+  - val
+  - BATCH_DICT_SEPARATOR
+  - auto3d_options
+  - auto3d_main
+  outputs:
+  - bool success
+  - results_dir/{PREFIX}.sdf
+  - results_dir/smi.smi
+  - optional results_dir/Auto3D.log
+invariants:
+- Batch dict value must be 'out_path:::prefix' (or prefix defaults to MOL_UNKNOWN).
+- Writes smi.smi with 'SMILES PREFIX' and expects Auto3D to produce an SDF.
+- Final output is named {PREFIX}.sdf.
+variants:
+  Auto3D-GPU-Slurm_default:
+    file: Auto3D-GPU-Slurm_default.sh
+    lines: 69
+    scheduler: any
+    tool: auto3d
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - purdue_standby_auto3d_auto_batch
+    notes: Useful when subbatching is disabled or for debugging.

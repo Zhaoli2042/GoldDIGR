@@ -1,0 +1,26 @@
+name: reactive_bem_summary_transposed
+description: "Detect reactive atoms/bonds by |\u0394(BEM)| threshold and write a transposed time-series CSV (rows=frames,\
+  \ cols=keys)."
+category: monitoring
+interface:
+  inputs:
+  - workdir
+  - thresh
+  - out_csv
+  outputs:
+  - path_to_csv_or_None
+invariants:
+- Reactivity is defined only by first vs last frame delta (not max excursion).
+- Diagonal keys are atom labels; off-diagonal keys are 'Ai-Aj' with i<j in label order.
+- 'Output is transposed: one row per frame, one column per flagged key.'
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 72
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Expects frame_*_bond_electrons.csv already present.

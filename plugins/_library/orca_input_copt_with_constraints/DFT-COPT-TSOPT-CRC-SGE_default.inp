@@ -1,0 +1,58 @@
+# ── SNIPPET: orca_input_copt_with_constraints/DFT-COPT-TSOPT-CRC-SGE_default ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      {{PLUGIN_NAME}}
+# Invariants:
+#   - Constraints are emitted as `%geom ... Constraints { B i j C } ... end`.
+#   - Keyword line includes functional + aux_basis + grid + OPT FREQ and optional dispersion/extra_keywords.
+#   - Uses %pal nprocs and %maxcore; sets %base to job_name.
+# Notes: Atom indices in constraints are passed through as provided (pipeline uses 0-based indices from bond_changes).
+# ────────────────────────────────────────────────────────────
+
+from typing import Dict, Any, Set, List, Tuple
+
+def generate_orca_input_copt(xyz_path: str, output_path: str, charge: int, mult: int,
+                             basis_assignment: Dict[str, Set[int]], config: Dict[str, Any],
+                             constraints: List[Tuple[int, int]] = None,
+                             nprocs: int = 16, maxcore: int = 4000, job_name: str = "copt"):
+    """Generate ORCA input for constrained geometry optimization."""
+    orca = get_orca_settings(config)
+
+    # Build keyword line
+    keywords = [f"! {orca['functional']}"]
+    if orca['extra_keywords']:
+        keywords.append(orca['extra_keywords'])
+    keywords.append(orca['aux_basis'])
+    keywords.append(orca['grid'])
+    if orca['dispersion']:
+        keywords.append(orca['dispersion'])
+    keywords.append("OPT FREQ")
+
+    keyword_line = " ".join(keywords)
+
+    # PAL block
+    pal_block = f"%pal\n  nprocs {nprocs}\nend"
+
+    # MaxCore
+    maxcore_line = f"%maxcore {maxcore}"
+
+    # Base name
+    base_line = f'%base "{job_name}"'
+
+    # GEOM block with constraints
+    geom_block = "%geom\n"
+    if constraints:
+        geom_block += "  Constraints\n"
+        for atom1, atom2 in constraints:
+            geom_block += f"    {{ B {atom1} {atom2} C }}\n"
+        geom_block += "  end\n"
+    geom_block += "end"
+
+    # Coordinate block
+    coord_block = generate_coord_block(xyz_path, charge, mult, basis_assignment)
+
+    # Combine all
+    content = f"{keyword_line}\n\n{pal_block}\n\n{maxcore_line}\n\n{base_line}\n\n{geom_block}\n\n{coord_block}\n"
+
+    with open(output_path, 'w') as f:
+        f.write(content)

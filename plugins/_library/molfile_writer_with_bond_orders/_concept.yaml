@@ -1,0 +1,26 @@
+name: molfile_writer_with_bond_orders
+description: Write V2000 molfile with bond orders derived from inferred bonding.
+category: adapters
+interface:
+  inputs:
+  - name
+  - elements
+  - geo
+  - adj_mat
+  - append_opt
+  outputs:
+  - .mol file
+invariants:
+- V2000 supports <1000 atoms; abort if exceeded.
+- Bond order comes from get_bonds(elements,adj_mat) (TAFFI logic).
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 50
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/write_functions.py
+    notes: Depends on Hybridization_finder and get_bonds from TAFFI stack (imported via id_types).

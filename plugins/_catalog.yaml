@@ -1,0 +1,2723 @@
+plugins:
+  xTB-wbo-scan-Slurm:
+    input_type: zip_archive
+    input_format: Per-TS zip archives (e.g., 12_1_2.zip) containing a TS folder with finished_irc.trj (multi-XYZ trajectory)
+      and related YARP/TSOPT artifacts; plus a text file listing finished TS directories (finished.txt or sample_list.txt
+      depending on script).
+    output_type: Augmented zip archives containing an xTB-scan/ folder with per-frame WBO/BEM CSVs and reactive_summary.csv;
+      plus an optional global JSONL summary (SCO_WBO_summary.jsonl) aggregating reactive bond slopes and spin-crossover events
+      across zips.
+    computation:
+      tool: xTB (with tblite spin-polarized pass + standard property pass)
+      type: script
+      container: none (host execution via modules/conda); apptainer available but not used by provided scripts
+      key_features:
+      - 'Per-frame spin scan: run xTB with multiple UHF values to detect best spin state and possible spin crossover frames'
+      - Bond order / bond electron matrix extraction from xTB WBO output and conversion to dense per-frame CSV matrices
+      - "Reactive event summarization by thresholding |\u0394(BEM)| between first and last frames and emitting a transposed\
+        \ time-series CSV"
+      - 'Post-hoc summarization over many zips: compute top slope events per reactive bond and emit JSONL records'
+    scheduler_tested:
+    - sge
+    - htcondor
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Shared paths detected (/scratch, /afs, /users). Scripts reference absolute paths in finished lists
+        and operate in-place on parent directories containing many .zip files; no HTCondor transfer directives present.
+      container_delivery: local_path
+      container_path: ''
+      container_interface:
+        runtime: apptainer
+        version: 1.4.5-1.el9
+        used_by_workflow: false
+      mpi: none
+      mpi_scheduler_integration: No MPI usage in provided scripts; SLURM template loads openmpi but workflow appears single-process
+        per job. Host probe reports MPI not found on host by default.
+      gpu_required: false
+      internet_required: true
+      special_requirements:
+      - Python 3 with numpy, pandas, tqdm installed (summarizer requires numpy/pandas; scan script uses tqdm and multiprocessing)
+      - xTB executable available on PATH (both tblite and standard modes invoked)
+      - unzip command available (submission script inspects zip contents)
+      - SLURM environment for provided submission helper (sbatch/squeue); target probe lists SGE/HTCondor but helper is SLURM-specific
+      - Module system (environment-modules) and conda module assumed by spin_bo.submit.template
+    files:
+      spin_wbo_scan.py:
+        role: driver
+        description: "Implements core xTB-based spin/WBO scan logic over multi-frame XYZ trajectories: parses trajectories,\
+          \ runs xTB in two passes (spin-polarized energy via tblite; properties via standard xTB), parses WBO outputs, writes\
+          \ per-frame bond order and bond electron matrix CSVs, and summarizes reactive elements via thresholded \u0394(BEM).\
+          \ As provided, the script is truncated mid-function and lacks the end-to-end CLI/driver and packaging steps."
+        concepts:
+        - name: multi-XYZ trajectory parsing
+          description: Reads concatenated XYZ blocks (e.g., finished_irc.trj) into per-frame (symbols, coords, comment) records.
+          transferable: true
+          lines: ~240-310
+        - name: spin-state parity heuristic
+          description: Computes total electrons from atomic numbers and charge; sets base UHF=0 for even-electron systems
+            else 1.
+          transferable: true
+          lines: ~330-360
+        - name: two-pass xTB execution pattern
+          description: Pass 1 uses --spinpol --tblite for stable spin-polarized energies and HOMO-LUMO gap; Pass 2 uses standard
+            xTB with --pop --wbo to extract charges/WBO.
+          transferable: true
+          lines: ~365-430 (pass 1), ~432+ (pass 2 begins but truncated)
+        - name: WBO file robust parsing
+          description: Parses xTB .wbo in either pair-list (i j value) or matrix form; normalizes to dict of (i<j)->wbo.
+          transferable: true
+          lines: ~190-240
+        - name: BEM (bond electron matrix) CSV generation
+          description: Writes dense per-frame CSV matrices for bond electrons (off-diagonal 2*WBO; diagonal estimated as nominal
+            valence minus incident WBO sum) and bond orders (off-diagonal WBO).
+          transferable: true
+          lines: ~95-175
+        - name: reactive element summarization (transposed time series)
+          description: "Loads all frame_*_bond_electrons.csv, finds entries with |\u0394|>=threshold between first/last, and\
+            \ writes reactive_summary.csv with rows=frames and columns=flagged bonds/atoms."
+          transferable: true
+          lines: ~40-95
+        - name: element tables for electrons/valence
+          description: Provides EL_TO_Z for total electron counting and NOMINAL_VALENCE for diagonal BEM estimation.
+          transferable: true
+          lines: ~15-75 (valence), ~175-190 (Z table)
+      submit_spin_bo_from_finished.sh:
+        role: adapter
+        description: "Queue-throttled SLURM submission helper: reads a list of finished TS directories, derives unique parent\
+          \ block directories, inspects each parent\u2019s zip files to find those with finished_irc.trj but lacking xTB-scan/,\
+          \ and submits one analysis job per parent using a submit template. Avoids duplicate submissions by job name and\
+          \ enforces a batch-tag job limit."
+        concepts:
+        - name: parent directory deduplication from finished list
+          description: Transforms TS-level paths into unique parent directories via dirname and sort -u.
+          transferable: true
+          lines: ~35-60
+        - name: zip content gating
+          description: Uses unzip -l + grep to detect whether a zip already contains xTB-scan/ and whether it contains finished_irc.trj
+            to decide if processing is needed.
+          transferable: true
+          lines: ~70-110
+        - name: queue throttling by batch tag
+          description: Polls squeue and limits concurrent jobs matching a batch name; sleeps between checks.
+          transferable: true
+          lines: ~140-190
+        - name: template-based job script materialization
+          description: Replaces placeholders (JOBNAME_PLACEHOLDER, FILEPATH) in a submit template to generate per-parent sbatch
+            scripts.
+          transferable: true
+          lines: ~155-180
+        - name: job name derivation from path
+          description: Extracts an index from path segments (/All-XYZ or /all-pdf-xyz) and combines with block basename for
+            stable job naming.
+          transferable: true
+          lines: ~115-150
+      summarize_sco_wbo.py:
+        role: operational
+        description: 'Post-processing summarizer: reads finished.txt, scans parent directories for zip archives that contain
+          xTB-scan/reactive_summary.csv, computes per-bond time-series slopes and top slope events, extracts TS frame (max
+          energy) from finished_irc.trj, optionally reads spin crossover metadata from xTB-scan/spin_crossover_frames.txt
+          and spin_scan_summary.csv, and writes one JSON record per zip to a JSONL output.'
+        concepts:
+        - name: TS frame detection from trajectory
+          description: Parses finished_irc.trj as repeated XYZ blocks and defines TS as the frame with maximum energy in comment
+            line.
+          transferable: true
+          lines: ~70-140
+        - name: zip introspection and selective extraction
+          description: Uses zipfile to locate members by suffix and read only needed files (reactive_summary.csv, spin crossover
+            files, finished_irc.trj).
+          transferable: true
+          lines: ~45-70, ~200-290
+        - name: reactive bond slope event detection
+          description: Computes finite-difference slopes per reactive column and records top-N |slope| events with frame/value.
+          transferable: true
+          lines: ~140-200
+        - name: JSONL emission for scalable aggregation
+          description: Writes one JSON object per processed zip for downstream indexing/analysis.
+          transferable: true
+          lines: ~290-360
+      spin_bo.submit.template:
+        role: config
+        description: SLURM batch script template that loads conda and modules, activates a conda env, and runs run_analysis.sh
+          on a specified parent directory (FILEPATH placeholder).
+        concepts:
+        - name: module + conda environment activation
+          description: Loads conda module and activates a named environment before running analysis.
+          transferable: true
+          lines: ~15-25
+        - name: single-node single-task batch configuration
+          description: Requests 1 node, 1 task, 4 hours; intended for serial analysis over many zips within a parent directory.
+          transferable: true
+          lines: ~1-14
+    patterns:
+      input_adaptation: Treat each TS zip as the unit of work; detect presence of finished_irc.trj inside zip; extract/parse
+        multi-XYZ trajectory into per-frame XYZs; run per-frame xTB; write results into an xTB-scan/ subfolder and reinsert
+        into the original zip.
+      job_submission: One job per parent directory containing many TS zips; job script generated from a template with placeholders;
+        submission throttled by counting queued jobs with a batch tag.
+      resource_management: 'Implicit: serial execution per job; optional parallelism inside scan script via ProcessPoolExecutor
+        for per-frame computations (not shown end-to-end due to truncation).'
+      monitoring: Queue monitoring via squeue polling; duplicate job avoidance by exact job-name match; zip-level idempotency
+        by checking for xTB-scan/ marker.
+      result_collection: Per-frame CSVs (bond_electrons, bond_orders) plus reactive_summary.csv stored under xTB-scan/ inside
+        each zip; global aggregation into SCO_WBO_summary.jsonl by scanning zips and extracting only required members.
+      charge_mult: Charge inferred from zip filename parts (e.g., 12_1_2.zip -> charge=1, mult=2) in the broader workflow
+        context; spin scan uses UHF values and parity heuristic (even/odd electron count) to set baseline UHF and detect best_UHF
+        per frame (implied by summarizer expecting spin_scan_summary.csv).
+    known_issues:
+    - scheduler: slurm
+      issue: Submission helper and template are SLURM-specific (sbatch/squeue), but target environment probe lists SGE and
+        HTCondor as available schedulers.
+      fix: Provide SGE qsub and/or HTCondor submit equivalents, or document SLURM-only usage; alternatively wrap submission
+        in a scheduler-abstraction layer.
+      pattern: Avoid hard-coding scheduler commands; isolate scheduler adapters per site.
+    - scheduler: any
+      issue: spin_wbo_scan.py is truncated mid-function and lacks CLI/driver logic and packaging steps; cannot run end-to-end.
+      fix: 'Restore full script: argument parsing, frame loop, xTB invocation for multiple UHF values, WBO parsing, CSV writing,
+        reactive_summary generation, and zip insertion under xTB-scan/.'
+      pattern: Ensure the entry-point script is complete and includes a reproducible main() with explicit inputs/outputs.
+    - scheduler: any
+      issue: run_analysis.sh referenced by spin_bo.submit.template is missing; submitted jobs will fail immediately.
+      fix: Add run_analysis.sh that iterates over zips in FILEPATH, runs spin_wbo_scan.py per zip/trajectory, and updates
+        the zip with xTB-scan/ outputs.
+      pattern: Templates must only reference version-controlled scripts shipped with the plugin.
+    - scheduler: any
+      issue: 'Input list filename mismatch: submit script expects sample_list.txt while summarizer defaults to finished.txt.'
+      fix: Standardize on one filename (e.g., finished.txt) or pass --finished to summarizer and make submit script configurable
+        via flag/env.
+      pattern: Use consistent conventions or expose filenames as CLI args across pipeline stages.
+    - scheduler: any
+      issue: Summarizer requires xTB-scan/reactive_summary.csv inside each zip; generation and insertion into zip are not
+        guaranteed by provided (incomplete) scan workflow.
+      fix: 'In run_analysis.sh or completed scan driver: always create xTB-scan/, run summarize_reactive_elements(), and write
+        reactive_summary.csv; then update zip with that folder.'
+      pattern: Downstream consumers should validate required artifacts and upstream stages should enforce artifact contracts.
+    glue_strategy: Parent-directory batch jobs inspect and update many TS zip archives in-place, adding an xTB-scan/ results
+      folder that downstream summarization reads directly from zip members.
+    reusable_for:
+    - "Any workflow that needs per-frame semiempirical bond order tracking along a trajectory (IRC/MD) and event detection\
+      \ via \u0394(BEM) thresholds"
+    - Pipelines that must be idempotent over archives by checking for marker folders/files inside zips before recomputation
+    - Large-scale summarization over many archived jobs using JSONL emission and selective zip member reads
+    - Scheduler-throttled submission patterns where one job processes a directory of many small tasks to reduce queue pressure
+    _status: complete
+  DFT-singlepoint-Anvil-Slurm:
+    input_type: golddigr_zip_archives
+    input_format: A directory tree of per-structure ZIP archives produced by GoldDIGR; each ZIP is named like <id>_<charge>_<multiplicity>.zip
+      and contains a folder of the same basename with one or more .xyz geometries (e.g., input.xyz, ts_final_geometry.xyz,
+      finished_first.xyz, etc.).
+    output_type: Per-archive results tarballs and status metadata
+    computation:
+      tool: ORCA + Multiwfn (bond order analysis)
+      type: script
+      container: Not provided; runtime assumed to contain /opt/orca and /opt/Multiwfn_bin (likely via Apptainer/Singularity
+        image or preinstalled software).
+      key_features:
+      - Runs ORCA single-point DFT (wB97X-V/def2-TZVP with RIJCOSX) on multiple candidate geometries per ZIP
+      - Runs Multiwfn in no-GUI mode to compute Mayer, Wiberg, and Fuzzy bond order matrices from ORCA outputs
+      - Implements wall-time watchdog and partial-completion behavior with JSON status reporting
+      - Batch submission manager with queue-throttling and audit-based resubmission support
+    scheduler_tested:
+    - sge
+    - htcondor
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Probe indicates shared paths (/scratch, /afs). Scripts use absolute paths under /anvil/scratch/...
+        implying a shared scratch filesystem across compute nodes.
+      container_delivery: local_path
+      container_path: Not specified in plugin; Apptainer runtime detected but no .sif URI/path is referenced in scripts.
+      container_interface:
+        runtime: apptainer
+        version: 1.4.5-1.el9
+        invocation_pattern: Not present; expected to be wrapped by missing slurm_job.sb or external site wrapper.
+      mpi: inside_container
+      mpi_scheduler_integration: Host MPI not found by probe; run_orca_wbo_anvil.sh sets OMPI_MCA_* variables to force TCP/vader
+        and disable UCX, suggesting ORCA/MPI is expected to be bundled with the runtime environment (container or ORCA distribution).
+        No scheduler-provided MPI integration is used.
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - Slurm commands (sbatch/squeue) are required by manager.sh and audit.sh, but Slurm is not listed in the detected schedulers;
+        site must provide Slurm or adapt scripts to SGE/HTCondor.
+      - ORCA binaries must exist at /opt/orca (orca, orca_2mkl) and Multiwfn_noGUI must be on PATH via /opt/Multiwfn_bin.
+      - unzip and tar must be available on execution nodes.
+      - Environment-modules exists on host, but no module load directives are included.
+    files:
+      audit.sh:
+        role: operational
+        description: Audits previously submitted jobs by checking for expected final result tarballs in OUTPUT_ROOT and querying
+          the scheduler for job presence; writes a failed_jobs.txt list suitable for resubmission.
+        concepts:
+        - name: submission_log_contract
+          description: 'Parses submitted_jobs.log as pipe-delimited records: timestamp | job_id | rel_path | zip_path; relies
+            on manager.sh to generate this exact format.'
+          transferable: true
+          lines: approx. 14-23, 27-49
+        - name: completion_signal_by_artifact
+          description: Defines job completion as existence of OUTPUT_ROOT/<REL_PATH>_results.tar.gz.
+          transferable: true
+          lines: approx. 25-41
+        - name: failure_list_for_retry
+          description: Emits failed_jobs.txt lines as '<ZIP_PATH> <REL_PATH>' for downstream retry tooling.
+          transferable: true
+          lines: approx. 42-46
+        - name: scheduler_query_slurm_squeue
+          description: Uses squeue -j to determine whether a job is still running/pending vs failed.
+          transferable: true
+          lines: approx. 34-45
+      manager.sh:
+        role: driver
+        description: Reads a prepared file list of ZIP archives and relative identifiers, throttles submissions to a maximum
+          concurrent job count, submits jobs via sbatch, and records job IDs to submitted_jobs.log.
+        concepts:
+        - name: queue_throttling
+          description: Implements a concurrency cap by polling squeue and waiting when CURRENT_JOBS >= MAX_JOBS.
+          transferable: true
+          lines: approx. 23-55
+        - name: idempotent_skip_if_output_exists
+          description: Skips submission if OUTPUT_ROOT/<REL_PATH>_results.tar.gz already exists.
+          transferable: true
+          lines: approx. 31-38
+        - name: batch_submission_and_jobid_capture
+          description: Submits with sbatch and extracts job ID from 'Submitted batch job <id>' output.
+          transferable: true
+          lines: approx. 57-69
+        - name: submission_audit_trail
+          description: Appends timestamp, job id, rel_path, zip_path to submitted_jobs.log for later auditing.
+          transferable: true
+          lines: approx. 71-74
+        - name: hardcoded_user_and_jobname_filter
+          description: Counts jobs using squeue -u x-zli65 and grep 'orca_wbo', coupling throttling to a specific username
+            and job-name pattern.
+          transferable: false
+          lines: approx. 44-46
+        - name: external_batch_script_dependency
+          description: Delegates actual execution, staging, and result placement to slurm_job.sb (not included).
+          transferable: true
+          lines: approx. 62
+      path_preparation.sh:
+        role: adapter
+        description: Mirrors the input directory structure into the results directory and generates file_list.txt mapping
+          absolute ZIP paths to relative paths (without .zip extension).
+        concepts:
+        - name: directory_structure_mirroring
+          description: Uses find to recreate all directories from SOURCE_DIR under TARGET_DIR.
+          transferable: true
+          lines: approx. 1-8
+        - name: zip_inventory_manifest
+          description: 'Creates file_list.txt with lines: ''<absolute_zip_path>, <relative_path_with_subfolders>''; then strips
+            ''.zip'' from both fields.'
+          transferable: true
+          lines: approx. 10-14
+        - name: relative_path_as_result_key
+          description: Uses the ZIP's relative path (including subfolders) as the stable identifier for naming outputs.
+          transferable: true
+          lines: approx. 10-14
+      run_orca_wbo_anvil.sh:
+        role: entry_point
+        description: 'Per-job computation script: extracts charge/multiplicity from ZIP basename, unzips geometries, runs
+          ORCA single-point calculations for a fixed set of candidate .xyz files, runs Multiwfn bond order analyses, writes
+          status.json, and packs outputs into results.tar.gz.'
+        concepts:
+        - name: charge_multiplicity_from_filename
+          description: Parses ZIP basename split by '_' to obtain CHARGE (NF-1) and MULT (NF).
+          transferable: true
+          lines: approx. 14-22
+        - name: orca_input_template_generation
+          description: Writes ORCA .inp files with method/basis, SCF settings, PAL nproc=4, and maxcore; uses *xyzfile with
+            parsed charge/multiplicity.
+          transferable: true
+          lines: approx. 108-121
+        - name: multi_geometry_attempt_loop
+          description: Iterates over a prioritized list of geometry names (finished_last, finished_last_opt, ts_final_geometry,
+            finished_first, finished_first_opt, input) and processes those present.
+          transferable: true
+          lines: approx. 86-99, 101-176
+        - name: round2_skiplist
+          description: Optional skip.txt marks molecules already completed in a previous round; statuses recorded as complete_previous_round.
+          transferable: true
+          lines: approx. 74-85
+        - name: walltime_watchdog
+          description: Implements a watchdog that kills ORCA processes near walltime; also skips remaining molecules when
+            remaining time < BUFFER_SECONDS.
+          transferable: true
+          lines: approx. 31-72, 101-116, 132-141
+        - name: orca_failure_classification
+          description: Distinguishes timeout-killed vs generic ORCA failure based on remaining time; cleans large intermediate
+            files on failure.
+          transferable: true
+          lines: approx. 123-141, 170
+        - name: multiwfn_batch_mode_bond_orders
+          description: Runs Multiwfn_noGUI with scripted menu inputs to produce Mayer/Wiberg/Fuzzy bond order matrices (bndmat.txt)
+            and renames them per molecule.
+          transferable: true
+          lines: approx. 145-166
+        - name: status_json_manifest
+          description: Writes status.json summarizing overall status (complete/partial), counts, and per-molecule status strings.
+          transferable: true
+          lines: approx. 179-203
+        - name: result_packaging
+          description: Creates results.tar.gz containing .out, .xyz, .inp, *_mat.txt, *_log.out, and status.json from the
+            working directory.
+          transferable: true
+          lines: approx. 205-208
+    patterns:
+      input_adaptation: GoldDIGR outputs are consumed as ZIP archives; path_preparation.sh inventories all *.zip under SOURCE_DIR
+        and produces a manifest mapping absolute ZIP path to a relative identifier (REL_PATH) used for output naming and directory
+        mirroring.
+      job_submission: manager.sh performs per-zip job submission (one Slurm job per ZIP) with a concurrency cap enforced by
+        polling the queue; job IDs are recorded for later auditing.
+      resource_management: ORCA resource control is set via %pal nproc 4 and %maxcore 1500 in generated inputs; manager.sh
+        assumes 4 cores/job and caps total jobs to bound total cores. Wall-time is managed by a watchdog and by skipping remaining
+        molecules when time is low.
+      monitoring: audit.sh monitors completion by checking for expected output artifacts and uses scheduler queries to distinguish
+        running vs failed; run_orca_wbo_anvil.sh emits status.json for per-molecule health and partial completion.
+      result_collection: Per-job script packs outputs into results.tar.gz; the overall workflow expects a renamed/moved artifact
+        at OUTPUT_ROOT/<REL_PATH>_results.tar.gz (implied to be handled by the missing batch wrapper).
+      charge_mult: 'Derived from ZIP filename tokens: <...>_<charge>_<multiplicity>.zip; charge is second-to-last token, multiplicity
+        is last token.'
+    known_issues:
+    - scheduler: slurm
+      issue: 'Missing batch wrapper: manager.sh calls ''sbatch slurm_job.sb ...'' but slurm_job.sb is not included, so jobs
+        cannot be launched and staging/collection behavior is undefined.'
+      fix: Provide slurm_job.sb that (1) stages ZIP into the job working directory, (2) invokes run_orca_wbo_anvil.sh with
+        the correct ZIP path or after cd, (3) renames/moves results.tar.gz to $OUTPUT_ROOT/${REL_PATH}_results.tar.gz, and
+        (4) sets job name to match manager's grep filter (orca_wbo) if throttling relies on it.
+      pattern: Always include the scheduler wrapper script and ensure it implements staging + final artifact placement consistent
+        with manager/audit expectations.
+    - scheduler: slurm
+      issue: 'Input list path mismatch: manager.sh expects INPUT_LIST at /anvil/scratch/.../file_list.txt, but path_preparation.sh
+        writes file_list.txt to the current working directory unless run from the expected location.'
+      fix: In path_preparation.sh, redirect output explicitly to /anvil/scratch/x-zli65/GoldDIGR-DFT-Singlepoint/file_list.txt
+        or cd to that directory before writing.
+      pattern: Avoid implicit CWD outputs; use absolute paths for generated manifests when downstream scripts hardcode locations.
+    - scheduler: slurm
+      issue: 'ZIP staging/path handling: run_orca_wbo_anvil.sh unzips ''$ZIP_FILENAME'' (basename only), requiring the ZIP
+        to be present in the working directory; manager passes an absolute ZIP_PATH to the batch job.'
+      fix: In slurm_job.sb, copy $ZIP_PATH into $SLURM_TMPDIR or $SLURM_SUBMIT_DIR and run from that directory, or modify
+        run_orca_wbo_anvil.sh to unzip '$ZIP_ARGUMENT' directly.
+      pattern: Ensure compute scripts consistently use absolute paths or explicitly stage inputs into the working directory.
+    - scheduler: slurm
+      issue: 'Results naming/collection mismatch: run_orca_wbo_anvil.sh creates results.tar.gz but the workflow completion
+        check expects $OUTPUT_ROOT/${REL_PATH}_results.tar.gz.'
+      fix: In slurm_job.sb (or in run_orca_wbo_anvil.sh), rename and move results.tar.gz to the expected final name in OUTPUT_ROOT.
+      pattern: Define a single authoritative completion artifact name and enforce it in the compute script or wrapper.
+    - scheduler: any
+      issue: 'Binary/container provisioning undefined: scripts assume /opt/orca and /opt/Multiwfn_bin exist, but no container
+        image, module loads, or installation steps are provided.'
+      fix: Provide an Apptainer/Singularity image path/URI and wrapper invocation, or add module load/install documentation
+        and checks that fail fast with clear errors.
+      pattern: Make runtime dependencies explicit and validated at job start (which orca, Multiwfn_noGUI, versions).
+    - scheduler: slurm
+      issue: 'audit.sh dependency on submitted_jobs.log: running audit.sh before manager.sh (or with an empty/missing log)
+        will produce errors or misleading output.'
+      fix: Add a guard in audit.sh to check for existence/non-emptiness of submitted_jobs.log and exit with instructions if
+        missing.
+      pattern: Operational scripts should validate required inputs/logs before processing.
+    - scheduler: environment
+      issue: 'Scheduler mismatch with detected environment: probe lists SGE and HTCondor, but scripts use Slurm commands (sbatch/squeue).'
+      fix: Port manager/audit to qsub/qstat (SGE) or condor_submit/condor_q (HTCondor), or ensure Slurm is available on the
+        target cluster.
+      pattern: Align orchestration scripts with the schedulers actually available; avoid hardcoding scheduler-specific commands
+        without abstraction.
+    glue_strategy: 'Two-phase orchestration: (1) prepare a manifest of ZIP inputs and mirrored output directories, (2) submit
+      one job per ZIP via a scheduler wrapper that stages inputs, runs the compute entrypoint, and deposits a uniquely named
+      result tarball for audit/skip logic.'
+    reusable_for:
+    - Any high-throughput quantum chemistry single-point workflow that runs multiple candidate geometries per system and aggregates
+      outputs into a single per-system artifact
+    - Workflows needing queue-throttled bulk submission with a persistent submission log and an audit/resubmit loop
+    - Pipelines requiring wall-time-aware partial completion and machine-readable status.json summaries
+    - Containerized (or preinstalled) scientific tools that require non-interactive CLI driving (e.g., Multiwfn menu scripting)
+      and deterministic output collection
+    _status: complete
+  DFT-singlepoint-OSG-Condor:
+    input_type: tarball
+    input_format: One or more *.tar.gz archives; each contains nested directories of *.zip files. Each zip filename encodes
+      charge and multiplicity as ..._<charge>_<mult>.zip and contains up to 6 molecule XYZs (finished_last, finished_last_opt,
+      ts_final_geometry, finished_first, finished_first_opt, input).
+    output_type: 'Per input zip: a *_results.tar.gz (remapped into results/ mirroring input structure) containing ORCA outputs,
+      Multiwfn bond-order matrices/logs, and status.json; plus optional long-term backup tarballs aggregating many *_results.tar.gz
+      files.'
+    computation:
+      tool: ORCA + Multiwfn (inside Apptainer/Singularity container) orchestrated by HTCondor
+      type: container
+      container: Apptainer/Singularity SIF providing /opt/orca/* and /opt/Multiwfn_bin/Multiwfn_noGUI; fetched via osdf://
+        URI in HTCondor +SingularityImage
+      container_interface:
+        image_uris:
+        - osdf:///ospool/uw-shared/projects/ND_Savoie/orca_6_1_1-zip-multiwfn-2.sif
+        - osdf:///ospool/ap40/data/${USER}/orca_6_1_1-zip-multiwfn-2.sif
+        runtime: singularity/apptainer via HTCondor
+        entrypoints:
+        - run_orca_wbo.sh (executed as HTCondor job executable; runs inside container context)
+        in_container_paths:
+          orca_bin_dir: /opt/orca
+          orca_exec: /opt/orca/orca
+          orca_2mkl: /opt/orca/orca_2mkl
+          multiwfn_exec: /opt/Multiwfn_bin/Multiwfn_noGUI
+        environment_set_by_job:
+        - PATH=/opt/orca:$PATH
+        - LD_LIBRARY_PATH=/opt/orca:$LD_LIBRARY_PATH
+        - OMPI_MCA_rmaps_base_oversubscribe=1
+        - OMPI_MCA_hwloc_base_binding_policy=none
+      key_features:
+      - Batch DFT single-point energy calculations per molecule geometry using ORCA (wB97X-V/def2-TZVP, RIJCOSX, CHELPG, Loewdin,
+        Mayer)
+      - Post-processing with Multiwfn to compute Mayer, Wiberg (Lowdin), and Fuzzy bond order matrices
+      - HTCondor staged submission (chunked lists) with queue-cap throttling
+      - 'Auto-healing of held jobs: transfer failures auto-release; memory/CPU/disk holds trigger resource escalation via
+        condor_qedit'
+      - Wall-time aware worker script with watchdog kill + partial-result packaging and status.json for round-2 resubmission
+      - Optional long-term backup packing of old results into aggregated tarballs with manifests and verification
+    scheduler_tested:
+    - sge
+    - htcondor
+    infrastructure:
+      filesystem: htcondor_transfer
+      filesystem_details: 'Compute jobs rely on HTCondor file transfer (transfer_input_files/transfer_output_files). Submit-side
+        workflow uses a shared filesystem for inputs/results/logs (probe: shared paths /scratch /afs; home /users/zli43).'
+      container_delivery: osdf
+      container_path: osdf:///ospool/uw-shared/projects/ND_Savoie/orca_6_1_1-zip-multiwfn-2.sif (hardcoded in submit file);
+        intended alternative per-user path osdf:///ospool/ap40/data/${USER}/orca_6_1_1-zip-multiwfn-2.sif (configured in start.sh
+        but not actually used due to token mismatch)
+      mpi: inside_container
+      mpi_scheduler_integration: 'No host MPI detected (probe). ORCA parallelism uses OpenMPI inside container; run_orca_wbo.sh
+        sets OMPI_MCA_* to avoid slot/binding errors under HTCondor. Note: ORCA %pal nproc is fixed at 4 regardless of HTCondor
+        CPU escalation.'
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - 'HTCondor client tools on submit node: condor_submit, condor_q, condor_qedit, condor_release, condor_rm'
+      - tmux on submit node for background monitors
+      - GNU userland expected (sed -i without suffix; stat -c; awk/comm/find)
+      - Apptainer/Singularity support on execute nodes via HTCondor +SingularityImage
+      - OSDF access required if using osdf:// container delivery (probe indicates OSDF/CVMFS not present on this machine;
+        workflow assumes OSPool environment where OSDF is available)
+      - 'Backup destination path must exist and be writable (see known issues: mismatch between scripts)'
+    files:
+      README.md:
+        role: config
+        description: 'High-level description of the workflow: ORCA single-point + Multiwfn WBO per XYZ; HTCondor + container;
+          lists major scripts.'
+        concepts:
+        - name: two-stage_compute_and_analysis
+          description: Run quantum chemistry compute (ORCA) then analyze outputs (Multiwfn bond orders).
+          transferable: true
+          lines: 1-20
+      WORKFLOW.md:
+        role: config
+        description: 'Operational documentation: directory layout, monitors, resource escalation policy, wall-time handling,
+          round-2 resubmission, and usage commands.'
+        concepts:
+        - name: chunked_submission_with_queue_cap
+          description: Split large job lists into chunks and submit only when queue has capacity.
+          transferable: true
+          lines: 'Workflow Phases / Monitor: Submission'
+        - name: auto_heal_held_jobs
+          description: Detect held jobs and apply automated fixes (release, resource escalation).
+          transferable: true
+          lines: 'Monitor: Health / Resource Escalation'
+        - name: walltime_aware_worker
+          description: Worker script checks remaining time before starting tasks and uses watchdog to kill long tasks to allow
+            packaging.
+          transferable: true
+          lines: Wall-Time Awareness
+        - name: round2_resubmission
+          description: Create second-round inputs for partial jobs using status.json and skip.txt to avoid recomputation.
+          transferable: true
+          lines: Round-2 Resubmission
+        - name: results_backup_aggregation
+          description: Pack many result tarballs into verified backup archives and delete originals after verification.
+          transferable: true
+          lines: 'Monitor: Backup'
+      start.sh:
+        role: entry_point
+        description: 'One-button launcher: preflight, extract tarballs to inputs/, build file_list.txt, mirror results/ dirs,
+          split into job_*.txt chunks, configure batch_job.submit via sed, and start tmux monitors (submit/health/backup).'
+        concepts:
+        - name: preflight_and_bootstrap
+          description: Validate required files and inputs; create working directories; make scripts executable.
+          transferable: true
+          lines: 1-120
+        - name: input_inventory_manifest
+          description: Generate file_list.txt mapping absolute zip path to relative output stem for remapping.
+          transferable: true
+          lines: 150-220
+        - name: submit_file_token_replacement
+          description: Replace placeholders in HTCondor submit file for container image and results directory.
+          transferable: true
+          lines: 225-260
+        - name: tmux_monitor_orchestration
+          description: Start/stop named tmux sessions to run long-lived monitors.
+          transferable: true
+          lines: 300-360
+      add_data.sh:
+        role: operational
+        description: 'Incrementally add new tar.gz inputs to an existing run: extract into inputs/, compute set-difference
+          vs file_list.txt, append new entries, create new job chunk files continuing numbering, and restart only the submit
+          monitor.'
+        concepts:
+        - name: idempotent_incremental_ingest
+          description: Use comm on sorted lists to add only new inputs without duplicating tracked work.
+          transferable: true
+          lines: 60-190
+        - name: chunk_number_continuation
+          description: Detect highest existing job_N.txt across pending and submitted_batches and continue numbering.
+          transferable: true
+          lines: 200-270
+        - name: selective_monitor_restart
+          description: Restart only the submission monitor to pick up new chunks while leaving health/backup running.
+          transferable: true
+          lines: 280-340
+      batch_job.submit:
+        role: adapter
+        description: 'HTCondor submit description: runs run_orca_wbo.sh with a zip path argument; transfers the script and
+          zip; returns results.tar.gz and remaps it into results/ nested structure; sets resource requests and logs.'
+        concepts:
+        - name: htcondor_file_transfer_model
+          description: transfer_input_files and transfer_output_files used to isolate compute jobs from submit filesystem.
+          transferable: true
+          lines: 15-35
+        - name: output_remap_to_shared_results_tree
+          description: transfer_output_remaps maps generic results.tar.gz to a structured path based on zip_relpath.
+          transferable: true
+          lines: 24-31
+        - name: container_binding_via_classad
+          description: Use +SingularityImage to run job inside a SIF container fetched via osdf://.
+          transferable: true
+          lines: 7-12
+      monitor_submit.sh:
+        role: operational
+        description: 'Drip-feeds job chunks to HTCondor: iterates job_*.txt in numeric order, checks current queue size, submits
+          when below MAX_JOBS, and moves submitted chunks to submitted_batches/.'
+        concepts:
+        - name: queue_throttling
+          description: Poll condor_q and enforce a maximum number of concurrent jobs.
+          transferable: true
+          lines: 20-90
+        - name: restart_safe_submission
+          description: Skip chunks already moved to submitted_batches/ to allow monitor restarts.
+          transferable: true
+          lines: 90-140
+      monitor_health.sh:
+        role: operational
+        description: 'Periodic health monitor: inspects held jobs; auto-releases transfer holds; escalates RequestMemory/RequestCpus
+          on memory/cpu holds; increases RequestDisk on disk holds; logs unknown holds; tracks per-job escalation levels.'
+        concepts:
+        - name: resource_escalation_state
+          description: Persist escalation level per job in resource_tracking.dat to make decisions across cycles.
+          transferable: true
+          lines: 35-140
+        - name: held_reason_classification
+          description: Classify HoldReason strings into transfer vs resource vs disk vs unknown.
+          transferable: true
+          lines: 150-280
+        - name: condor_qedit_auto_tuning
+          description: Use condor_qedit to adjust RequestMemory/RequestCpus/RequestDisk then condor_release.
+          transferable: true
+          lines: 200-330
+        - name: max_level_safety_stop
+          description: Do not auto-release jobs beyond a maximum escalation level; log for manual intervention.
+          transferable: true
+          lines: 235-270
+      backup_results.sh:
+        role: operational
+        description: 'Backup monitor: periodically finds old, quiet *_results.tar.gz under results/, packs them into a verified
+          tar.gz at a destination storage path, writes manifests, deletes originals after verification, and resumes incomplete
+          backups.'
+        concepts:
+        - name: age_and_quiet_time_gating
+          description: Only back up files older than MIN_FILE_AGE and not modified within MIN_QUIET_TIME.
+          transferable: true
+          lines: 70-150
+        - name: verified_archive_then_delete
+          description: Create archive, verify with tar -tzf, atomic rename, then delete originals.
+          transferable: true
+          lines: 160-270
+        - name: manifest_based_resume
+          description: Track backup progress in manifest files and resume/repair incomplete backups.
+          transferable: true
+          lines: 275-340
+      prepare_round2.sh:
+        role: operational
+        description: Scans local results and backup archives for partial status.json; for each partial job, builds a round-2
+          zip containing unfinished XYZs plus completed outputs and skip.txt; generates file_list_round2.txt and mirrors directories.
+        concepts:
+        - name: partial_detection_via_status_json
+          description: Extract status.json from result tarballs and select those with status=partial.
+          transferable: true
+          lines: 70-190
+        - name: carry_forward_completed_outputs
+          description: Include completed .out/.inp/matrix/log files in round-2 zip so final results are self-contained.
+          transferable: true
+          lines: 240-330
+        - name: skip_list_contract
+          description: Write skip.txt listing completed molecule names; worker respects it to avoid recomputation.
+          transferable: true
+          lines: 310-360
+        - name: scan_backups_for_inner_results
+          description: Extract backup archives and inspect contained *_results.tar.gz files.
+          transferable: true
+          lines: 190-240
+      run_orca_wbo.sh:
+        role: driver
+        description: 'Worker-side computation: parse charge/multiplicity from zip filename; unzip inputs; optionally read
+          skip.txt; for each molecule XYZ, generate ORCA input, run ORCA, convert to Molden, run Multiwfn bond-order analyses,
+          clean heavy files; enforce wall-time with pre-check and watchdog; write status.json; pack results.tar.gz.'
+        concepts:
+        - name: charge_mult_from_filename
+          description: Derive charge and multiplicity from the last two underscore-separated fields of the zip basename.
+          transferable: true
+          lines: 20-45
+        - name: walltime_precheck_and_watchdog
+          description: Before each molecule, ensure enough time remains; watchdog kills ORCA near wall limit to allow packaging.
+          transferable: true
+          lines: 50-140
+        - name: round2_skip_semantics
+          description: If skip.txt exists, mark molecules as complete_previous_round and skip computation.
+          transferable: true
+          lines: 145-175
+        - name: orca_input_template
+          description: Generate ORCA .inp with fixed method/basis and %pal nproc=4 and %maxcore=2500.
+          transferable: true
+          lines: 220-250
+        - name: multiwfn_batch_mode
+          description: Drive Multiwfn_noGUI via here-doc input scripts to produce bond order matrices (bndmat.txt renamed).
+          transferable: true
+          lines: 285-360
+        - name: status_json_contract
+          description: Emit status.json with overall status and per-molecule statuses used by prepare_round2.sh.
+          transferable: true
+          lines: 390-470
+        - name: results_packaging
+          description: Create results.tar.gz containing selected outputs and status.json for HTCondor transfer.
+          transferable: true
+          lines: 480-520
+      status.sh:
+        role: operational
+        description: 'Quick status dashboard: summarizes condor_q, chunk submission progress, held job reasons, maxed jobs,
+          local results count, backup count/size, tmux sessions, and resource escalation tracking.'
+        concepts:
+        - name: lightweight_ops_dashboard
+          description: Single script to summarize workflow state from filesystem + scheduler queries.
+          transferable: true
+          lines: 1-170
+    patterns:
+      input_adaptation: Extract *.tar.gz into inputs/ preserving nested structure; enumerate all *.zip; build file_list.txt
+        lines as 'zip_abspath, zip_relpath_no_ext' where zip_relpath_no_ext mirrors inputs/ relative path without .zip; HTCondor
+        queues over this list.
+      job_submission: 'Chunked submission: split file_list into job_*.txt (default 1000 lines) and submit sequentially when
+        condor_q count < MAX_JOBS; move submitted chunks to submitted_batches/ for restart safety.'
+      resource_management: Health monitor inspects held jobs; on memory/cpu holds, escalates RequestMemory/RequestCpus through
+        predefined levels and releases; on disk holds, sets RequestDisk to 40GB; tracks escalation in resource_tracking.dat;
+        stops auto-release at max level.
+      monitoring: 'Three tmux-based long-running monitors: submit (throttle), health (auto-heal), backup (archive). Health
+        monitor classifies HoldReason strings and applies targeted remediation.'
+      result_collection: Worker always produces results.tar.gz; HTCondor transfers it back and remaps to results/<zip_relpath>_results.tar.gz;
+        backup monitor later aggregates many result tarballs into backup_*.tar.gz with manifests and verification.
+      charge_mult: 'Parsed from zip basename: CHARGE = second-to-last underscore field; MULT = last underscore field (e.g.,
+        05_-1_1.zip => -1, 1).'
+    known_issues:
+    - scheduler: htcondor
+      issue: 'Backup path mismatch: docs/status/prepare_round2 expect backups under /ospool/ap40/data/$USER/dft_energy_backups/,
+        but backup_results.sh writes to /ospool/uw-shared/projects/ND_Savoie/$USER/...; backups may fail or be undiscoverable
+        for status/round-2 scanning.'
+      fix: Unify DEST_BASE and project naming across backup_results.sh, status.sh, and prepare_round2.sh; choose one canonical
+        base path and update all scripts accordingly.
+      pattern: Keep a single source of truth for storage destinations; reuse shared config file or environment variable.
+    - scheduler: htcondor
+      issue: 'Container image token not used: start.sh replaces __CONTAINER_IMAGE__ in batch_job.submit, but submit file hardcodes
+        +SingularityImage to a shared path; per-user container path is ignored and may be inaccessible.'
+      fix: Replace hardcoded +SingularityImage with __CONTAINER_IMAGE__ token (or read from submit macro) so start.sh can
+        configure it.
+      pattern: Avoid hardcoding site/user-specific container URIs; parameterize via tokens/macros.
+    - scheduler: htcondor
+      issue: 'run_orca_wbo.sh unzips using basename only: it calls unzip on $ZIP_FILENAME (basename of argument) rather than
+        the provided path; if HTCondor places the transferred zip under a different name/path, unzip fails.'
+      fix: Use unzip on the original argument path (unzip -q -j "$ZIP_ARGUMENT") or ensure transfer renames into cwd; optionally
+        add 'transfer_input_files = ..., $(zip_abspath)' plus 'arguments = $(zip_filename)' with explicit rename.
+      pattern: When schedulers pass absolute paths, do not discard them; operate on the argument path or normalize robustly.
+    - scheduler: htcondor
+      issue: 'Inconsistent project name derivation for backups: backup_results.sh uses PROJECT_NAME from parent dir of script
+        dir; status.sh/prepare_round2.sh use PROJECT_PARENT from parent of pwd/script dir differently; can cause lookup in
+        wrong backup folder.'
+      fix: Standardize project naming (e.g., set PROJECT_NAME in a config file written by start.sh and sourced by all scripts).
+      pattern: Derive run identifiers once and persist them; avoid recomputing with slightly different heuristics.
+    - scheduler: htcondor
+      issue: 'sed -i portability: start.sh uses GNU sed -i without suffix; fails on BSD/macOS sed, leaving submit file unconfigured.'
+      fix: Use portable sed invocation (detect OS; use sed -i'' on BSD) or write to temp file then mv.
+      pattern: Prefer portable text substitution patterns in cross-platform launchers.
+    glue_strategy: Submit-side bash scripts generate and manage HTCondor queue inputs and monitors; execute-side bash driver
+      runs inside a container and returns a single results.tar.gz which HTCondor remaps into a structured results tree.
+    reusable_for:
+    - Any high-throughput HTC workflow needing staged HTCondor submission with queue caps and restart-safe chunk tracking
+    - Containerized scientific compute + post-processing pipelines that must run under strict wall-time limits and still return
+      partial, resumable outputs
+    - Automated remediation of held HTCondor jobs via HoldReason classification and condor_qedit-based resource escalation
+    - Round-2 resubmission patterns using a status manifest (status.json) plus skip lists to avoid recomputation
+    - Verified backup aggregation of many small result artifacts into fewer archives with manifests and safe deletion
+    _status: complete
+  DFT-singlepoint-CRC-Condor:
+    input_type: golddigr
+    input_format: One or more .tar.gz archives containing nested directories of per-job .zip inputs; each .zip contains molecule
+      .xyz files (often under a subfolder) and is named with underscore-delimited fields where the last two fields are charge
+      and multiplicity (e.g., 32_0_1.zip => charge=0 mult=1).
+    output_type: 'Per input .zip: a *_results.tar.gz placed into a mirrored nested directory under results/, containing ORCA
+      outputs (.out/.inp), copied .xyz, Multiwfn bond order matrices/logs, and status.json indicating per-molecule completion/timeout
+      for round-2 resubmission; plus optional long-term backup tarballs of older results.'
+    computation:
+      tool: ORCA + Multiwfn (bond order analysis) executed via Apptainer inside HTCondor jobs
+      type: container
+      container: Apptainer/Singularity .sif image containing /opt/orca (orca, orca_2mkl) and /opt/Multiwfn_bin/Multiwfn_noGUI;
+        executed with bind mount of the HTCondor scratch working directory
+      key_features:
+      - Single-point DFT (wB97X-V/def2-TZVP, RIJCOSX) for multiple molecule geometries per job
+      - Multiwfn Mayer/Wiberg/Fuzzy bond order matrices extracted from ORCA Molden output
+      - Wall-time aware execution with watchdog kill + partial completion tracking (status.json)
+      - Round-2 resubmission support using skip.txt to avoid recomputing completed molecules
+      - HTCondor staged submission (chunked input lists) with auto-healing of held jobs via condor_qedit/condor_release
+      - Periodic results archiving to long-term shared storage with verification and manifests
+    scheduler_tested:
+    - sge
+    - htcondor
+    infrastructure:
+      filesystem: shared
+      filesystem_details: 'Shared filesystem present across nodes (probe: shared paths include /scratch and /afs; workflow
+        hardcodes shared group paths under /groups/...). HTCondor also uses file transfer for per-job inputs/outputs (transfer_input_files/transfer_output_files),
+        but results are remapped to an absolute shared results directory.'
+      container_delivery: local_path
+      container_path: /groups/bsavoie2/zli43/orca_6_1_1-zip-multiwfn-2.sif
+      mpi: inside_container
+      mpi_scheduler_integration: No host MPI detected (probe). ORCA parallelism uses internal OpenMPI inside container; run_orca_wbo.sh
+        sets OMPI_MCA_rmaps_base_oversubscribe=1 and OMPI_MCA_hwloc_base_binding_policy=none to avoid slot/binding errors
+        on HTCondor execute nodes.
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - 'Apptainer runtime available on execute nodes (/usr/bin/apptainer; probe: apptainer 1.4.5)'
+      - HTCondor client tools available on submit node for monitors (condor_q, condor_submit, condor_qedit, condor_release)
+      - tmux required for background monitors as designed (submit/health/backup sessions)
+      - Write access to shared results directory and backup destination under /groups/bsavoie2/zli43/$USER
+      - zip/unzip, tar, find, awk, sed available on submit node; unzip/zip used by prepare_round2.sh on submit node
+      - SIF image must be pre-staged at the configured shared path (plugin does not fetch/build it)
+    container_interface:
+    - name: orca_6_1_1-zip-multiwfn-2.sif
+      runtime: apptainer
+      image: /groups/bsavoie2/zli43/orca_6_1_1-zip-multiwfn-2.sif
+      entrypoint: run_wrapper.sh -> apptainer exec ... /bin/bash run_orca_wbo.sh <zip>
+      binds:
+      - host: $PWD
+        container: $PWD
+        mode: rw
+      executables_expected:
+      - /opt/orca/orca
+      - /opt/orca/orca_2mkl
+      - /opt/Multiwfn_bin/Multiwfn_noGUI
+    files:
+      start.sh:
+        role: driver
+        description: 'Initializes the workflow: extracts input tarballs into inputs/, builds file_list.txt mapping absolute
+          zip paths to relative output keys, mirrors directory structure under results/, splits into job_*.txt chunks, and
+          (intended to) start tmux monitors; also attempts placeholder substitution in batch_job.submit.'
+        concepts:
+        - name: input_inventory_and_mapping
+          description: Creates file_list.txt with lines 'zip_abspath, zip_relpath_no_ext' used by HTCondor queue statement.
+          transferable: true
+          lines: approx 120-190
+        - name: directory_mirroring
+          description: Mirrors nested inputs/ directory structure under results/ to support transfer_output_remaps into existing
+            directories.
+          transferable: true
+          lines: approx 175-185
+        - name: chunked_submission_lists
+          description: Splits file_list.txt into fixed-size job_N.txt batches for staged submission.
+          transferable: true
+          lines: approx 215-255
+        - name: placeholder_substitution_intent
+          description: Attempts to replace __CONTAINER_IMAGE__ and __RESULTS_DIR__ in batch_job.submit (but submit file currently
+            lacks these placeholders).
+          transferable: true
+          lines: approx 195-215
+        - name: tmux_monitor_orchestration_intent
+          description: Documents starting submit/health/backup monitors in tmux, but actual tmux commands are commented out
+            (known issue).
+          transferable: true
+          lines: approx 260-315
+      add_data.sh:
+        role: operational
+        description: 'Adds new tarball inputs to an already-initialized workflow: extracts into inputs/, computes set-difference
+          against existing file_list.txt to avoid duplicates, appends new entries, mirrors new directories under results/,
+          creates new job_*.txt chunks continuing numbering, and restarts only the submit monitor tmux session.'
+        concepts:
+        - name: idempotent_incremental_ingest
+          description: Uses comm on sorted absolute zip paths to add only previously-untracked inputs.
+          transferable: true
+          lines: approx 60-150
+        - name: continuous_batch_numbering
+          description: Finds max existing job_N across pending and submitted batches to continue numbering without collisions.
+          transferable: true
+          lines: approx 165-215
+        - name: selective_monitor_restart
+          description: Restarts only the submit tmux session so new batches are picked up while health/backup continue.
+          transferable: true
+          lines: approx 230-285
+      batch_job.submit:
+        role: config
+        description: 'HTCondor submit description: transfers wrapper + compute script + per-job zip, runs run_wrapper.sh with
+          zip path argument, transfers back results.tar.gz and remaps it into a nested results directory using zip_relpath.'
+        concepts:
+        - name: htcondor_file_transfer
+          description: Uses transfer_input_files and transfer_output_files to stage scripts and zip to execute node and return
+            results.tar.gz.
+          transferable: true
+          lines: approx 1-20
+        - name: transfer_output_remaps_to_shared_tree
+          description: Remaps returned results.tar.gz to an absolute shared results directory path with nested naming based
+            on zip_relpath.
+          transferable: true
+          lines: approx 12-16
+        - name: queue_from_two_column_csv
+          description: Queues jobs from an input list with 'zip_abspath, zip_relpath' columns.
+          transferable: true
+          lines: approx 28-40
+        pitfalls:
+        - Hardcoded absolute results path currently points to a specific project directory; start.sh placeholder replacement
+          does not apply (known issue).
+      run_wrapper.sh:
+        role: adapter
+        description: HTCondor executable that runs Apptainer exec with bind mount of $PWD and invokes run_orca_wbo.sh inside
+          the container, passing the zip path argument.
+        concepts:
+        - name: container_wrapper_for_condor
+          description: Separates scheduler execution from containerized computation; ensures transferred working directory
+            is visible inside container via bind.
+          transferable: true
+          lines: approx 1-20
+        - name: container_path_configuration
+          description: Defines CONTAINER_IMAGE as a shared filesystem path; must exist on execute nodes.
+          transferable: true
+          lines: approx 10-14
+      run_orca_wbo.sh:
+        role: entry_point
+        description: 'Main per-job computation: parses charge/multiplicity from zip filename, unzips inputs, optionally reads
+          skip.txt, runs ORCA for each molecule geometry with wall-time checks and watchdog, runs Multiwfn bond order analyses,
+          writes status.json, and packs results.tar.gz.'
+        concepts:
+        - name: charge_multiplicity_from_filename
+          description: Extracts charge and multiplicity from the last two underscore-delimited fields of the zip basename.
+          transferable: true
+          lines: approx 25-45
+        - name: walltime_aware_loop
+          description: Uses WALL_SECONDS/BUFFER_SECONDS to decide whether to start next molecule; marks remaining as timeout_skipped;
+            watchdog kills ORCA near wall limit.
+          transferable: true
+          lines: approx 50-170
+        - name: round2_skip_list
+          description: Reads skip.txt to mark molecules as complete_previous_round and skip recomputation.
+          transferable: true
+          lines: approx 175-205
+        - name: orca_input_template
+          description: Generates ORCA .inp with wB97X-V/def2-TZVP, RIJCOSX, CHELPG, Loewdin, Mayer; sets %pal nproc and %maxcore.
+          transferable: true
+          lines: approx 245-275
+        - name: multiwfn_bond_order_automation
+          description: Runs Multiwfn_noGUI with scripted menus to compute Mayer/Wiberg/Fuzzy matrices and captures logs/matrices.
+          transferable: true
+          lines: approx 310-390
+        - name: status_json_for_resubmission
+          description: Writes status.json with per-molecule statuses and overall status (complete/partial/all_molecules_missing).
+          transferable: true
+          lines: approx 430-520
+        - name: results_packaging
+          description: Creates results.tar.gz from selected outputs; minimal tarball if all molecules missing.
+          transferable: true
+          lines: approx 530-575
+        - name: mpi_oversubscribe_fix
+          description: Sets OMPI_MCA variables to avoid OpenMPI slot/binding errors in opportunistic environments.
+          transferable: true
+          lines: approx 85-95
+      monitor_submit.sh:
+        role: operational
+        description: 'Drip-feeds job chunks to HTCondor: iterates job_*.txt in numeric order, waits until condor_q job count
+          is below MAX_JOBS, submits via condor_submit with input_list macro, and moves submitted batch files to submitted_batches/.'
+        concepts:
+        - name: capacity_aware_staged_submission
+          description: Implements a queue-capacity gate to avoid flooding the scheduler; submits one chunk at a time.
+          transferable: true
+          lines: approx 1-120
+        - name: idempotent_batch_tracking
+          description: Uses submitted_batches/ to skip already-submitted chunks after restarts.
+          transferable: true
+          lines: approx 55-95
+      monitor_health.sh:
+        role: operational
+        description: 'Auto-heals held HTCondor jobs: releases transfer-related holds, escalates memory/CPU on resource holds
+          using defined levels and tracking file, upgrades disk on disk holds, logs unknown holds, and stops when no jobs
+          remain.'
+        concepts:
+        - name: resource_escalation_ladder
+          description: Defines RESOURCE_LEVELS as memoryMB:cpus; bumps level on memory/cpu holds; tracks per job in resource_tracking.dat.
+          transferable: true
+          lines: approx 20-210
+        - name: hold_reason_classification
+          description: Classifies holds by regex on HoldReason (transfer/OSDF/sif vs memory/cpu vs disk vs unknown).
+          transferable: true
+          lines: approx 120-310
+        - name: condor_qedit_autorepair
+          description: Uses condor_qedit to change RequestMemory/RequestCpus/RequestDisk then condor_release to retry.
+          transferable: true
+          lines: approx 170-320
+        - name: tracking_file_garbage_collection
+          description: Periodically prunes resource_tracking.dat to only current jobs.
+          transferable: true
+          lines: approx 330-390
+      backup_results.sh:
+        role: operational
+        description: 'Background backup monitor: every 4 hours, finds result tarballs older than 4 hours and quiet for 10
+          minutes, waits for a minimum count, creates verified tar.gz archives in long-term shared storage, deletes originals
+          only after verification, and maintains manifests to resume incomplete backups.'
+        concepts:
+        - name: age_and_quiet_time_eligibility
+          description: Selects files by mtime thresholds to avoid racing with in-progress writes.
+          transferable: true
+          lines: approx 70-140
+        - name: verified_archival_with_manifest
+          description: Writes manifest, creates .tmp archive, verifies with tar -tzf, atomically renames, then deletes originals.
+          transferable: true
+          lines: approx 140-260
+        - name: resume_incomplete_backups
+          description: Detects IN_PROGRESS/FAILED manifests and attempts to complete or retry safely.
+          transferable: true
+          lines: approx 260-330
+        - name: destination_disk_alerting
+          description: Checks df usage and alerts if destination exceeds threshold.
+          transferable: true
+          lines: approx 95-125
+      prepare_round2.sh:
+        role: operational
+        description: Builds round-2 resubmission inputs for partial (timed-out) jobs by scanning results tarballs (local and
+          backups), extracting status.json, carrying forward completed outputs, generating skip.txt, and creating new zips
+          plus file_list_round2.txt.
+        concepts:
+        - name: partial_detection_via_status_json
+          description: Extracts status.json from results tarballs and selects those with status=partial.
+          transferable: true
+          lines: approx 70-190
+        - name: carry_forward_completed_outputs
+          description: Copies completed molecule outputs from round-1 results into round-2 zip to keep final results self-contained.
+          transferable: true
+          lines: approx 250-330
+        - name: skip_txt_generation
+          description: Creates skip.txt listing completed molecules so run_orca_wbo.sh skips them in round-2.
+          transferable: true
+          lines: approx 330-360
+        - name: round2_file_list_generation
+          description: Creates file_list_round2.txt in the same two-column format used by batch_job.submit.
+          transferable: true
+          lines: approx 360-410
+      status.sh:
+        role: operational
+        description: 'Human-facing status dashboard: summarizes condor_q totals, pending/submitted chunk counts, held job
+          reasons, maxed-out jobs log, local results count, backup archive count/size, tmux monitor sessions, and resource
+          escalation tracking.'
+        concepts:
+        - name: workflow_observability_summary
+          description: Aggregates scheduler, filesystem, and monitor state into a quick CLI report.
+          transferable: true
+          lines: approx 1-170
+      apply_memory_fix.sh:
+        role: operational
+        description: Idempotent patch script intended to reduce memory usage and adjust health escalation levels; edits run_orca_wbo.sh
+          %maxcore, batch_job.submit request_memory, monitor_health.sh RESOURCE_LEVELS, qedits idle jobs, and restarts health
+          monitor.
+        concepts:
+        - name: bulk_config_patch_with_sed
+          description: Applies in-place edits across multiple workflow files to change resource defaults.
+          transferable: true
+          lines: approx 1-140
+        - name: in_queue_resource_rewrite
+          description: Uses condor_qedit with constraints to update RequestMemory for all idle jobs.
+          transferable: true
+          lines: approx 140-190
+        - name: monitor_restart_after_policy_change
+          description: Restarts tmux health monitor to pick up new escalation ladder.
+          transferable: true
+          lines: approx 190-235
+    patterns:
+      input_adaptation: Extract tar.gz archives into inputs/ preserving nested structure; enumerate all *.zip under inputs/;
+        create a two-column mapping file (absolute zip path, relative path without .zip) used by HTCondor 'queue ... from
+        $(input_list)'; mirror directory structure under results/ so transfer_output_remaps can target existing directories.
+      job_submission: Stage submission via chunk files job_N.txt (default 1000 lines each). monitor_submit.sh submits one
+        chunk at a time when condor_q job count is below MAX_JOBS, then moves the chunk into submitted_batches/ for idempotent
+        restarts.
+      resource_management: 'Two-layer resource control: (1) ORCA %maxcore and %pal nproc inside the job; (2) HTCondor RequestMemory/RequestCpus/RequestDisk
+        in submit file. monitor_health.sh escalates held jobs through a predefined ladder using condor_qedit + condor_release,
+        tracking per-job levels in resource_tracking.dat; disk holds trigger RequestDisk upgrade.'
+      monitoring: 'Three tmux-based monitors: submit (capacity-aware drip feed), health (auto-heal held jobs by reason classification),
+        backup (periodic verified archival with manifests and resume). status.sh provides a consolidated observability view.'
+      result_collection: Each job produces results.tar.gz; HTCondor transfers it back and remaps it to results/<zip_relpath>_results.tar.gz
+        on a shared filesystem. backup_results.sh later packs older *_results.tar.gz into backup_*.tar.gz archives in long-term
+        storage, deleting originals only after verification.
+      charge_mult: 'Derived from zip basename split on underscores: CHARGE is the second-to-last field and MULT is the last
+        field (e.g., 32_0_1.zip => charge=0, mult=1).'
+    known_issues:
+    - scheduler: htcondor
+      issue: start.sh attempts to replace __CONTAINER_IMAGE__ and __RESULTS_DIR__ placeholders in batch_job.submit, but batch_job.submit
+        contains no such placeholders and instead hardcodes transfer_output_remaps to /groups/bsavoie2/GoldDIGR-DFT-SinglePoint/Zhao-Calcs/results.
+        Outputs will be remapped to the wrong directory and may fail due to permissions/nonexistent path.
+      fix: Add placeholders to batch_job.submit (e.g., __RESULTS_DIR__) and use them in transfer_output_remaps; or edit transfer_output_remaps
+        directly to point to $SCRIPT_DIR/results. Validate directory exists and is writable.
+      pattern: Avoid hardcoded absolute paths in submit descriptors; use templated tokens replaced by the launcher and verify
+        substitution actually matches file content.
+    - scheduler: htcondor
+      issue: Container image path is defined in both start.sh and run_wrapper.sh, but start.sh does not propagate changes
+        into run_wrapper.sh; jobs may run with an incorrect/nonexistent SIF path and fail immediately.
+      fix: 'Use a single source of truth: either pass container path via environment/macro into run_wrapper.sh, or template
+        CONTAINER_IMAGE in run_wrapper.sh and replace it in start.sh.'
+      pattern: Centralize runtime artifact paths (containers) and ensure launch-time configuration updates all execution points.
+    - scheduler: htcondor
+      issue: start.sh claims to start tmux monitors, but tmux new-session commands are commented out; no jobs will be submitted
+        automatically unless the user manually starts monitor_submit.sh.
+      fix: Uncomment or re-enable tmux session creation, or provide a non-tmux fallback that runs monitors in background with
+        nohup/systemd.
+      pattern: Ensure the driver script actually launches required daemons/monitors; keep documentation and implementation
+        consistent.
+    - scheduler: htcondor
+      issue: apply_memory_fix.sh claims it updates the container path to a shared project location, but it does not edit run_wrapper.sh
+        (or any file) to change CONTAINER_IMAGE.
+      fix: Implement sed replacement in run_wrapper.sh (and/or start.sh) for CONTAINER_IMAGE, or remove the claim from the
+        script header.
+      pattern: Fix scripts should be idempotent and truthful; verify each promised change is implemented.
+    - scheduler: htcondor
+      issue: Required Apptainer .sif image is not included and there is no fetch/build step; workflow fails if the image is
+        missing on shared storage.
+      fix: Provide a documented build recipe or an OSDF/CVMFS distribution method; add preflight checks in start.sh/run_wrapper.sh
+        to verify the SIF exists and is readable on submit and execute nodes.
+      pattern: External artifacts must be provisioned explicitly; add preflight validation and clear acquisition steps.
+    glue_strategy: HTCondor submit file queues per-zip jobs; a wrapper script runs Apptainer exec to invoke the containerized
+      compute script; monitors in tmux manage staged submission, auto-healing, and backups.
+    reusable_for:
+    - Any HTCondor-based high-throughput workflow needing chunked submission with queue-capacity gating
+    - Containerized scientific codes on opportunistic clusters using Apptainer with bind-mounted working directories
+    - Auto-healing patterns for held HTCondor jobs using HoldReason classification + condor_qedit escalation ladders
+    - Wall-time aware multi-step jobs that must produce partial-but-usable outputs and support round-2 resubmission
+    - Verified archival/backup loops with manifests, atomic rename, and safe deletion of originals
+    _status: complete
+  Perovskite-ligand-screening:
+    input_type: ligand_library
+    input_format: Directory of ligand geometries as .xyz (one per ligand, e.g., NH3_2C_Angew-1+H_minimized.xyz) optionally
+      generated from SMILES enumeration; paired with per-ligand TAFFI-style .db forcefield files after parametrization; plus
+      a per-run config.txt for MD submission.
+    output_type: stability_screening_results
+    output_format: Per-ligand stability metrics (bond quadratic elongation and angle variance) aggregated across multiple
+      MD replicates into stability.out and stabilities.out; optional SQLite DB updates; optional ML model artifacts (trained
+      classifiers, metrics plots).
+    computation:
+      tool: LAMMPS + ORCA/xTB + AmberTools (antechamber) + TAFFI utilities + scikit-learn
+      type: script
+      container: none (assumes host-installed scientific software and HPC modules)
+      key_features:
+      - Enumerate ligand candidates from SMILES and generate 3D xyz geometries (OpenBabel/RDKit).
+      - 'Batch ligand parametrization: optional geometry optimization (ORCA or xTB), ORCA ESP singlepoints, charge fitting,
+        and TAFFI-style db generation.'
+      - Build 2D perovskite monolayer bulk MD systems per ligand and submit multiple replicate LAMMPS runs via Slurm.
+      - Parse LAMMPS trajectories to quantify BX6 octahedral distortion metrics and classify stability.
+      - Collect/aggregate stability outcomes and optionally insert/update results in an SQLite database.
+      - Train and evaluate ML classifiers on engineered features to predict stability labels.
+    scheduler_tested:
+    - slurm
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Assumes a shared POSIX filesystem visible to submit and compute nodes; workflow creates many per-ligand/per-run
+        subdirectories and relies on in-place files (sbatch, squeue, reading/writing trajectories).
+      container_delivery: none
+      container_path: n/a
+      mpi: host_openmpi
+      mpi_scheduler_integration: LAMMPS submission script loads openmpi module and typically runs MPI-enabled LAMMPS; integration
+        is via Slurm sbatch with -N/-n; actual mpirun/srun invocation is expected in generated submit.sh (partially shown).
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - 'Slurm commands available: sbatch, squeue.'
+      - 'Host installations required: ORCA (4.x), xTB (optional), LAMMPS, AmberTools/antechamber, OpenBabel (pybel), RDKit,
+        NumPy/SciPy, scikit-learn, imbalanced-learn, seaborn/matplotlib.'
+      - Cluster module system assumed in generated LAMMPS submit scripts (module load gcc/openmpi/etc.).
+      - Hard-coded default paths in step0/make_db.py point to /depot/... locations; must be overridden for other sites.
+    files:
+      README.md:
+        role: config
+        description: Top-level documentation describing the MD and ML pipeline stages and required software.
+        concepts:
+        - name: two_stage_pipeline_md_ml
+          description: MD-based stability labeling followed by ML model training for prediction.
+          transferable: true
+          lines: 1-20
+      .golddigrignore:
+        role: config
+        description: Excludes large/binary outputs and test directories from packaging (e.g., *.out, *.db, *.data, MD_test/).
+        concepts:
+        - name: artifact_exclusion
+          description: Keep workflow code small by excluding generated outputs and intermediates.
+          transferable: true
+          lines: 1-20
+      make_tree.sh:
+        role: operational
+        description: Utility to generate a directory tree listing; includes recursion-safe local loop variable fix.
+        concepts:
+        - name: recursive_tree_walk_bash
+          description: Recursive directory traversal with correct prefix formatting and local loop variable scoping.
+          transferable: true
+          lines: 1-60
+      MD/generate_molecules.py:
+        role: driver
+        description: Enumerates monomer/dimer/4mer ligand SMILES via R-group substitution and converts to optimized xyz using
+          OpenBabel/pybel; writes monomers.smi/dimer.smi/4mer.smi and numbered xyz files.
+        concepts:
+        - name: rgroup_enumeration
+          description: Cartesian product enumeration of substituents attached to labeled dummy atoms in a core SMILES.
+          transferable: true
+          lines: 1-170
+        - name: rdkit_mol_combination
+          description: Programmatic molecule assembly by removing dummy atoms and adding bonds between fragments.
+          transferable: true
+          lines: 170-360
+        - name: smiles_to_3d_xyz_with_optimization
+          description: Use pybel to build 3D, add hydrogens, and run a global optimization before writing xyz.
+          transferable: true
+          lines: 360-430
+        concepts_note: File content provided appears truncated at the end; actual implementation must include complete smi2xyz()
+          and globalopt() logic.
+      MD/step0.prepare_ligand_batch.py:
+        role: entry_point
+        description: 'Batch ligand parametrization orchestrator: per-ligand directory creation, optional geometry optimization
+          (ORCA/xTB), ORCA charge singlepoint, charge extraction, and TAFFI db generation; collects successful outputs into
+          Ready/.'
+        concepts:
+        - name: batch_directory_fanout
+          description: For each input xyz, create a standardized per-ligand folder structure (geoopt/charge/make_db).
+          transferable: true
+          lines: 70-150
+        - name: hpc_job_orchestration_with_polling
+          description: Submit many jobs and block until completion using a queue monitor.
+          transferable: true
+          lines: 150-240
+        - name: resume_and_collect_mode
+          description: A --collect mode that only checks status and gathers outputs without resubmitting.
+          transferable: true
+          lines: 40-120
+        - name: runtime_script_generation
+          description: Generate makedb.sh on the fly inside each ligand's make_db directory and execute it.
+          transferable: true
+          lines: 330-420
+        concepts_note: Relies on helper functions (write_orcash, write_optin, write_chargein, write_extractQsh, submit_job_nomonitor,
+          check_orca_complete, check_xtb_complete, write_xtbsh) that are not present in the provided bundle.
+      MD/step1.build_bulk_sims.py:
+        role: entry_point
+        description: Builds per-ligand perovskite monolayer MD systems using perovskite_builder.py, creates replicate run
+          directories, writes LAMMPS input and Slurm submission scripts, and submits jobs via sbatch.
+        concepts:
+        - name: paired_input_discovery
+          description: Operate on all *.xyz in cwd that have a matching *.db; skip strays.
+          transferable: true
+          lines: 30-70
+        - name: replicate_runs
+          description: Create run1..runN directories with identical starting data/settings to estimate stability robustly.
+          transferable: true
+          lines: 80-140
+        - name: config_driven_submission
+          description: Read cluster-specific resources and LAMMPS path from config.txt.
+          transferable: true
+          lines: 20-40
+      MD/step2.evaluate_octahedra.py:
+        role: entry_point
+        description: Parses LAMMPS trajectories to compute BX6 octahedral distortion metrics (bond quadratic elongation and
+          angle variance) over selected frames; writes stability.out per ligand directory.
+        concepts:
+        - name: trajectory_frame_generator
+          description: Iterate frames from a LAMMPS lammpstrj and compute per-site metrics.
+          transferable: true
+          lines: 120-220
+        - name: pbc_unwrap_and_neighbor_search
+          description: Unwrap coordinates under PBC and identify nearest neighbors to define local octahedra.
+          transferable: true
+          lines: 220-360
+        - name: stability_metric_definition
+          description: Compute <lambda> (bond length quadratic elongation) and sigma^2 (bond angle variance) as stability
+            proxies.
+          transferable: true
+          lines: 1-80
+        - name: mapfile_driven_atom_selection
+          description: Use TAFFI-style correspondence map and LAMMPS data parsing to locate metal/halide indices.
+          transferable: true
+          lines: 70-140
+      MD/step3.collect_stabilities.py:
+        role: driver
+        description: Aggregates stability.out across ligand directories, applies pass/fail/strained criteria, organizes outputs
+          into Stability/{Passed,Failed,Strained}, and optionally updates an SQLite database.
+        concepts:
+        - name: threshold_based_classification
+          description: Classify formed/disordered/failed based on bond_lqe_diff and angle_var_diff cutoffs.
+          transferable: true
+          lines: 120-260
+        - name: results_aggregation_and_reporting
+          description: Build a Results dict per ligand and a Summary across ligands; write consolidated outputs.
+          transferable: true
+          lines: 80-340
+        - name: optional_db_update
+          description: Insert/update perovskite outcomes into an existing SQLite DB schema.
+          transferable: true
+          lines: 40-120
+      MD/lib/functions.py:
+        role: library
+        description: 'Shared utilities: working-directory context manager, Logger, config parser for MD submission, and queue
+          checking for Slurm/PBS.'
+        concepts:
+        - name: cd_context_manager
+          description: Safely change directories for nested operations.
+          transferable: true
+          lines: 15-35
+        - name: timestamped_logger
+          description: Redirect stdout to both terminal and a timestamped log file.
+          transferable: true
+          lines: 37-60
+        - name: config_key_validation
+          description: Parse config.txt and enforce required keys and integer casting.
+          transferable: true
+          lines: 62-110
+        - name: scheduler_detection
+          description: Detect slurm vs pbs by checking for squeue/qstat binaries.
+          transferable: true
+          lines: 112-210
+      MD/lib/functions_writers.py:
+        role: library
+        description: Writers for LAMMPS input scripts and Slurm/PBS submission scripts; supports NPT/NVT, optional NVE relax
+          cycles, tethering, and resubmission chaining.
+        concepts:
+        - name: parameterized_lammps_input_template
+          description: Generate a complete LAMMPS control script with variables, fixes, dumps, and restart/data outputs.
+          transferable: true
+          lines: 1-220
+        - name: run_extension_self_resubmit
+          description: LAMMPS script edits its own run counter and conditionally resubmits via sbatch/qsub.
+          transferable: true
+          lines: 220-320
+        - name: slurm_submission_template_with_modules
+          description: Generate sbatch script with module loads and resource directives.
+          transferable: true
+          lines: 320-420
+      MD/lib/functions_db.py:
+        role: library
+        description: SQLite helper functions for inserting and querying bodies/ligands/perovskites/fingerprints and existence
+          checks.
+        concepts:
+        - name: sqlite_crud_helpers
+          description: Centralized SQL statements for inserts, deletes, and retrieval.
+          transferable: true
+          lines: 1-220
+        - name: id_lookup_tables
+          description: Fetch id/name mappings for foreign-key insertion.
+          transferable: true
+          lines: 220-280
+      MD/lib/file_parsers.py:
+        role: library
+        description: Parsers for xyz files and ORCA input files; used by TAFFI utilities.
+        concepts:
+        - name: xyz_parser
+          description: Read elements and coordinates from xyz with header validation; optional atom types column.
+          transferable: true
+          lines: 1-90
+        - name: orca_input_parser
+          description: Parse multi-job ORCA inputs including charge/multiplicity and geometry blocks.
+          transferable: true
+          lines: 90-210
+      MD/lib/adjacency.py:
+        role: library
+        description: Build adjacency matrices from geometries using UFF radii heuristics; includes canonicalization and hashing
+          utilities.
+        concepts:
+        - name: distance_based_bond_inference
+          description: Infer bonds from interatomic distances using element radii and a scale factor.
+          transferable: true
+          lines: 1-120
+        - name: max_bond_sanity_pruning
+          description: Prune overcoordinated atoms by removing longest inferred bonds.
+          transferable: true
+          lines: 120-190
+        - name: canonical_geometry_ordering
+          description: Reorder atoms deterministically using recursive mass-weighted hashing.
+          transferable: true
+          lines: 190-280
+      MD/lib/id_types.py:
+        role: library
+        description: TAFFI atom typing from adjacency matrices/lists; includes ring detection and graph traversal helpers.
+        concepts:
+        - name: taffi_recursive_atom_hash_typing
+          description: Generate hierarchical atom types based on graph neighborhoods up to gens.
+          transferable: true
+          lines: 40-160
+        - name: ring_atom_detection
+          description: Detect ring membership via bounded-depth graph search.
+          transferable: true
+          lines: 160-260
+        - name: connected_component_traversal
+          description: Return nodes connected to a start while avoiding specified nodes.
+          transferable: true
+          lines: 260-320
+      MD/lib/kekule.py:
+        role: library
+        description: "Generate 2D Kekul\xE9-like drawings from 3D geometries using adjacency, transify, and heuristic relaxation;\
+          \ outputs PDF drawings."
+        concepts:
+        - name: 2d_layout_from_graph
+          description: Construct 2D coordinates from molecular graph and relax with simple potentials.
+          transferable: true
+          lines: 1-140
+        - name: ring_handling_in_layout
+          description: Temporarily remove terminal ring substituents to establish ring topology, then reinsert and reoptimize.
+          transferable: true
+          lines: 140-260
+      MD/lib/transify.py:
+        role: library
+        description: Generate all-trans conformers by straightening backbone dihedrals; optional OpenBabel minimization and
+          terminal conformer search.
+        concepts:
+        - name: graph_diameter_backbone_selection
+          description: Choose start/end atoms by maximum topological separation and straighten along shortest path.
+          transferable: true
+          lines: 40-120
+        - name: dihedral_based_rotation
+          description: Rotate connected subgraphs around bonds to enforce trans dihedrals.
+          transferable: true
+          lines: 120-200
+        - name: external_optimizer_hook
+          description: Call obminimize/obenergy via subprocess for final relaxation and scoring.
+          transferable: true
+          lines: 200-360
+      MD/lib/write_functions.py:
+        role: library
+        description: Writers for xyz/mol/pdb formats; mol_write computes bond orders and writes V2000.
+        concepts:
+        - name: molfile_writer_with_bond_orders
+          description: Write V2000 mol with bond orders derived from inferred bonding.
+          transferable: true
+          lines: 30-120
+        - name: pdb_conect_writer
+          description: Write PDB with CONECT records from adjacency.
+          transferable: true
+          lines: 120-190
+      MD/util/monitor_jobs.py:
+        role: adapter
+        description: Simple Slurm queue monitor that polls squeue for job IDs until completion.
+        concepts:
+        - name: polling_based_job_barrier
+          description: Block workflow progress until a set of submitted job IDs are no longer running/pending.
+          transferable: true
+          lines: 1-70
+      MD/util/extract_charges.py:
+        role: driver
+        description: TAFFI charge fitting from ORCA .vpot grids (CHELPG/RESP-like), supports symmetry constraints and UA option;
+          writes outputs to charge_parse/.
+        concepts:
+        - name: esp_grid_charge_fit
+          description: Fit partial charges to reproduce electrostatic potential with optional dipole/quadrupole penalties.
+          transferable: true
+          lines: 1-140
+        - name: folder_protocol_batch_fit
+          description: Recursive discovery of *.vpot files and paired *.out/*.xyz for multi-config fitting.
+          transferable: true
+          lines: 140-260
+        - name: fixed_charge_constraints_from_db
+          description: Hold charges fixed for atomtypes found in supplied FF db files.
+          transferable: true
+          lines: 60-110
+      MD/util/make_db.py:
+        role: driver
+        description: Build TAFFI-style .db forcefield file for a ligand from xyz and an Amber/GAFF parameter file; optionally
+          merges fitted charges; can run antechamber to assign atom types.
+        concepts:
+        - name: antechamber_atomtyping_bridge
+          description: Use AmberTools antechamber to assign GAFF/Amber atom types when xyz lacks types.
+          transferable: true
+          lines: 80-170
+        - name: parameter_mapping_and_reference_chart
+          description: Map determined atom types to parameter-file types and emit a detailed reference chart for debugging
+            missing parameters.
+          transferable: true
+          lines: 170-320
+        - name: db_assembly
+          description: Assemble masses/bonds/angles/dihedrals/VDW/charges into a TAFFI-style database file.
+          transferable: true
+          lines: 1-80
+      MD/util/perovskite_builder.py:
+        role: driver
+        description: Construct perovskite crystal/monolayer structures with optional heterojunctions, hydration, vacancies,
+          and mixing rules; writes LAMMPS data/settings and correspondence maps.
+        concepts:
+        - name: structure_builder_with_forcefield_lookup
+          description: Build unit cell and supercell, assign TAFFI atom types, and fetch parameters from a FF db with optional
+            mixing/UFF supplementation.
+          transferable: true
+          lines: 1-220
+        - name: monolayer_surface_cation_insertion
+          description: Place surface cations with specified orientation angles; supports tether fix output when not hydrated.
+          transferable: true
+          lines: 40-140
+        - name: heterojunction_halide_support
+          description: Support two-halide systems by splitting metal atom types (e.g., Pb_I vs Pb_Br).
+          transferable: true
+          lines: 140-210
+      ML/ML_all_model.py:
+        role: driver
+        description: Hyperparameter tuning and evaluation across multiple classifiers using SMOTE oversampling and Leave-One-Out
+          CV; writes results to all_model/result.txt.
+        concepts:
+        - name: imbalanced_class_handling_smote
+          description: Oversample minority class before train/test split.
+          transferable: true
+          lines: 30-70
+        - name: gridsearch_with_loo
+          description: Use GridSearchCV with LeaveOneOut cross-validation for small datasets.
+          transferable: true
+          lines: 70-150
+        - name: feature_table_parser
+          description: Parse property.txt with header features and last-column label.
+          transferable: true
+          lines: 150-210
+      ML/ML_single_model.py:
+        role: driver
+        description: Train a tuned RandomForest model, compute ROC/AUC, permutation feature importance, and confusion matrix
+          plots; writes artifacts to single_model/.
+        concepts:
+        - name: permutation_importance_reporting
+          description: Compute and plot permutation importance with error bars.
+          transferable: true
+          lines: 40-120
+        - name: roc_curve_plotting
+          description: Compute ROC curve from predict_proba and save publication-style plot.
+          transferable: true
+          lines: 120-220
+        - name: confusion_matrix_visualization
+          description: Reusable seaborn heatmap confusion matrix with summary stats.
+          transferable: true
+          lines: 220-360
+    patterns:
+      input_adaptation: Ligand candidates are represented as individual .xyz files; step0 converts each xyz into a TAFFI-style
+        parameter database (.db) by running (optional) geometry optimization, ORCA ESP singlepoint, charge fitting (extract_charges.py),
+        then make_db.py to merge parameters/charges. step1 expects paired xyz+db with identical basename.
+      job_submission: 'High-throughput fan-out: step1 submits one Slurm job per ligand per replicate run directory (run1..runN)
+        using sbatch; step0 submits per-ligand ORCA/xTB jobs and blocks using a polling monitor.'
+      resource_management: Resources are configured via config.txt (nodes/ppn/walltime/queue/LAMMPS_PATH) for MD; step0 uses
+        a user-specified -cpu for ORCA. No dynamic escalation; failures are detected by checking output/success files and
+        skipping downstream steps.
+      monitoring: Polling-based monitoring via squeue (monitor_jobs.py) and output-file completion checks (e.g., presence
+        of 0.success, ORCA completion checks).
+      result_collection: step2 writes stability.out per ligand directory; step3 aggregates across directories, applies thresholds,
+        copies ligand images into Passed/Failed/Strained, and writes a consolidated stabilities.out; optional insertion into
+        SQLite DB.
+      charge_mult: Charge/multiplicity are handled explicitly in ORCA input parsing and antechamber invocation; defaults in
+        make_db.py are q=0, multiplicity=1 unless overridden; perovskite_builder uses explicit ionic charges via -q 'cation
+        metal anion'.
+    known_issues:
+    - scheduler: slurm
+      issue: step1.build_bulk_sims.py hard-requires a config.txt (or -config override) with JOB_MD_PPN, JOB_MD_NODES, JOB_MD_WALLTIME,
+        JOB_MD_QUEUE, LAMMPS_PATH; no template provided.
+      fix: Provide a site-specific config.txt in the working directory or pass -config with a valid file; ensure LAMMPS_PATH
+        points to an MPI-capable lmp executable.
+      pattern: config_file_contracts_must_ship_templates
+    - scheduler: slurm
+      issue: step0.prepare_ligand_batch.py depends on helper functions and Logger not present/imported in the provided bundle
+        (e.g., write_orcash, submit_job_nomonitor, check_orca_complete).
+      fix: Vendor the missing util modules or refactor step0 to import MD/lib/functions.Logger and include the missing submission/check
+        writer utilities; validate imports before job submission.
+      pattern: orchestrator_scripts_should_bundle_all_helpers
+    - scheduler: slurm
+      issue: make_db.py and step0 default to hard-coded /depot/... paths for ORCA/xTB/AmberTools; will fail on other clusters.
+      fix: Override CLI arguments (-orca_exe, -xtb_exe, -amber_exe) and make_db.py -amber path; consider environment modules
+        or PATH-based discovery.
+      pattern: avoid_hardcoded_hpc_paths
+    - scheduler: slurm
+      issue: Required master parameter file gaff2_perov.dat is referenced by step0-generated makedb.sh but not included.
+      fix: Ship gaff2_perov.dat with the plugin or require users to provide it and pass its path into the generated makedb.sh/make_db.py
+        call.
+      pattern: external_forcefield_assets_must_be_packaged
+    - scheduler: slurm
+      issue: step3.collect_stabilities.py defaults to using MD/data/ML_perovskites.db, which is not included; script aborts
+        unless -name None is used.
+      fix: Run with -name None to skip DB steps, or provide the expected SQLite DB file/schema in MD/data/.
+      pattern: optional_db_dependencies_should_default_off_or_ship_db
+    - scheduler: slurm
+      issue: MD/generate_molecules.py content appears truncated; if true, it will raise a syntax error and block ligand generation.
+      fix: Ensure the full script is present (complete smi2xyz and optimization routines) or regenerate from source control.
+      pattern: packaging_must_include_complete_sources
+    - scheduler: slurm
+      issue: Documentation/comments reference missing scripts (e.g., ML.parse_form_bulk.sh) and a prettier name evaluate_octahedra.py;
+        can confuse operators.
+      fix: Treat references as comments only; use MD/step2.evaluate_octahedra.py for stability evaluation.
+      pattern: keep_docs_in_sync_with_entrypoints
+    glue_strategy: Python entry-point scripts orchestrate per-ligand directory fan-out, generate input decks and submission
+      scripts, submit Slurm jobs, poll for completion, then parse outputs into aggregated stability metrics and optional DB
+      records.
+    reusable_for:
+    - Any high-throughput MD screening workflow that needs per-candidate parametrization, replicate MD runs, trajectory-derived
+      stability metrics, and aggregation into pass/fail labels.
+    - Workflows that bridge quantum chemistry ESP calculations to force-field charge fitting and database generation.
+    - HPC Slurm-based pipelines that generate job scripts programmatically and use polling barriers for dependency management.
+    - Small-dataset ML classification pipelines using SMOTE and Leave-One-Out CV with standardized plotting/reporting.
+    _status: complete
+  Auto3D-GPU-Slurm:
+    input_type: smiles_prefix_list
+    input_format: 'Plaintext file with one molecule per line: ''SMILES PREFIX'' (whitespace-separated). Prefix is used as
+      stable molecule identifier and output filename stem.'
+    output_type: Per-molecule 3D structure files (.sdf) produced by Auto3D (AIMNET, GPU-enabled), plus per-batch benchmark
+      JSONs and summary lists of finished/failed/missing SMILES for retry.
+    computation:
+      tool: Auto3D (Python package) via purdue_standby_auto3d_auto_batch.py
+      type: script
+      container: none (conda environment expected; no container references detected)
+      key_features:
+      - Batches a large SMILES list into JSON batch dictionaries for distributed execution
+      - Generates SLURM submission scripts per batch targeting GPU partitions (A100/A30/A10/H100) with standby QoS
+      - Runs Auto3D on GPU with AIMNET optimizing engine; writes per-prefix SDF outputs and .smi provenance files
+      - Collects per-batch benchmark metadata (intended) and compiles finished/failed/missing SMILES lists for iterative retries
+      - Post-run utility to consolidate scattered SDF outputs into a single directory and build a master SMILES/PREFIX map
+    scheduler_tested:
+    - slurm
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Assumes a shared filesystem visible to submit and compute nodes (uses relative paths under the working
+        directory and /scratch conda env path; no HTCondor transfer semantics).
+      container_delivery: none
+      container_path: ''
+      mpi: none
+      mpi_scheduler_integration: Auto3D is invoked with mpi_np=10 but no explicit mpirun/srun; relies on Auto3D internal parallelism
+        and allocated CPUs (--cpus-per-gpu=10).
+      gpu_required: true
+      internet_required: false
+      special_requirements:
+      - 'SLURM cluster with GPU partitions named like: a100-80gb,a100-40gb,a30,a10,h100 and QoS ''standby'''
+      - Module system providing 'module load conda' and ability to 'conda activate <env>' inside batch jobs
+      - Conda environment must include Auto3D and GPU stack compatible with node drivers (README references auto3d_conda_package_260113.yaml,
+        not included)
+      - Sufficient memory per job (script requests 100G) and local scratch space for temporary Auto3D working directories
+    files:
+      README.md:
+        role: config
+        description: 'Operational runbook for Purdue Standby: create conda env, run auto-batching driver, triage failures/missing,
+          collect SDFs, and transfer results to a target dataset directory.'
+        concepts:
+        - name: iterative_retry_loop
+          description: Run batches, then generate failed/missing SMILES lists and re-run until coverage is complete.
+          transferable: true
+          lines: 1-8
+        - name: cluster_specific_run_instructions
+          description: Assumes Purdue Standby SLURM environment, conda module, and specific destination paths for final data
+            transfer.
+          transferable: false
+          lines: 1-8
+      purdue_standby_auto3d_auto_batch.py:
+        role: driver
+        description: 'Primary workflow driver: reads SMILES/PREFIX list, creates batch JSON dicts, writes SLURM submission
+          scripts, submits jobs, and runs Auto3D per batch (intended). Produces per-prefix SDF and .smi outputs and per-batch
+          benchmark JSONs (intended).'
+        concepts:
+        - name: project_directory_layout
+          description: Defines fixed output subdirectories for geometric outputs, batch dicts, submissions, and benchmarks
+            under ./geo_data_out_path/.
+          transferable: true
+          lines: 20-33
+        - name: smiles_prefix_parsing
+          description: Parses each input line as SMILES plus optional PREFIX; PREFIX becomes stable identifier and output
+            filename stem.
+          transferable: true
+          lines: 52-92
+        - name: done_set_filtering
+          description: Supports skipping already-processed SMILES via a provided 'smiles_done_set' when generating batch dicts.
+          transferable: true
+          lines: 55-96
+        - name: batch_dict_contract
+          description: Batch JSON maps SMILES -> 'out_dir:::prefix' using BATCH_DICT_SEPARATOR to pack multiple fields into
+            one value.
+          transferable: true
+          lines: 34-36, 73-90
+        - name: slurm_submission_script_generation
+          description: Writes per-batch SBATCH scripts requesting 1 GPU, 10 CPUs, 100G RAM, 4h walltime, standby QoS, and
+            GPU partitions list; activates conda env then calls this script with 'run-batch'.
+          transferable: true
+          lines: 106-151
+        - name: bulk_job_submission
+          description: Submits many batch scripts via sbatch up to a max cap (default 4900) and records submitted filenames.
+          transferable: true
+          lines: 154-166
+        - name: temporary_workdir_per_subbatch
+          description: Creates a unique temp directory under the first molecule's output directory to run Auto3D once for
+            a subbatch, then distributes per-prefix outputs.
+          transferable: true
+          lines: 214-323
+        - name: sdf_record_splitting_by_title
+          description: Splits a multi-record SDF into per-molecule records keyed by the first line (title), expected to match
+            PREFIX labels.
+          transferable: true
+          lines: 184-212
+        - name: per_prefix_output_fanout
+          description: Writes {PREFIX}.sdf and {PREFIX}.smi for each molecule; copies Auto3D.log and optional encoded SDF
+            for provenance.
+          transferable: true
+          lines: 268-323
+        - name: single_smiles_fallback_mode
+          description: Runs Auto3D per SMILES and writes results into an out_path/results directory using PREFIX-based filenames.
+          transferable: true
+          lines: 326-402
+        - name: benchmark_metadata_capture_intent
+          description: Captures SLURM env metadata (partition, job id, etc.) and intends to write per-batch benchmark JSON
+            for downstream status aggregation; implementation is truncated.
+          transferable: true
+          lines: 405-460 (truncated)
+        - name: auto3d_dependency_guard
+          description: If Auto3D import fails, sets _AUTO3D_AVAILABLE=False and skips computations with warnings.
+          transferable: true
+          lines: 10-18, 214-233, 326-334
+      get_auto3d_calc_status.py:
+        role: operational
+        description: Aggregates per-batch benchmark JSONs into human-readable summaries (txt/tsv) and emits finished (SMILES-only),
+          failed (SMILES PREFIX), and missing (SMILES PREFIX) lists for retries.
+        concepts:
+        - name: benchmark_json_schema_assumption
+          description: 'Expects JSON fields: batch_id, hostname, slurm.partition, slurm.job_id, elapsed_hms, counts{done,total,failed},
+            batch_json_path, completed_smiles, per_smiles_status.'
+          transferable: true
+          lines: 70-156
+        - name: smiles_prefix_map_rehydration
+          description: Loads original SMILES list to map SMILES back to PREFIX for failed/missing outputs.
+          transferable: true
+          lines: 33-58, 90-99, 160-205
+        - name: missing_set_computation
+          description: Computes missing = original - finished - failed to drive iterative reruns.
+          transferable: true
+          lines: 186-205
+        - name: elapsed_time_aggregation
+          description: Parses elapsed_hms per batch, sums total time, and reports per-molecule average.
+          transferable: true
+          lines: 61-88, 206-226
+        - name: hardcoded_paths_rounds
+          description: Uses hardcoded BENCH_DIR and output filenames tied to a specific round (rd_4) and requires manual editing
+            of ORIGINAL_SMILES_PATH.
+          transferable: false
+          lines: 6-20, 23-25
+      collect_auto3d_structures.py:
+        role: operational
+        description: Walks an Auto3D output tree, copies all .sdf files into a single directory, and appends SMILES/PREFIX
+          lines from accompanying .smi files into a consolidated mapping file.
+        concepts:
+        - name: recursive_result_collection
+          description: Uses os.walk to find outputs across nested batch directories and consolidate them.
+          transferable: true
+          lines: 24-71
+        - name: provenance_map_compilation
+          description: Builds/updates all_smiles_prefix_map.txt by reading each {PREFIX}.smi (expected format 'SMILES PREFIX').
+          transferable: true
+          lines: 52-86
+        - name: metadata_preserving_copy
+          description: Uses shutil.copy2 to preserve timestamps/metadata when collecting SDFs.
+          transferable: true
+          lines: 43-51
+    patterns:
+      input_adaptation: Input is a SMILES/PREFIX list; driver deduplicates lines, parses SMILES and PREFIX, and encodes per-molecule
+        output routing as JSON mapping SMILES -> 'out_dir:::prefix'.
+      job_submission: Generates one SLURM sbatch script per batch JSON; optionally submits many jobs in bulk (up to a cap)
+        from a submissions directory.
+      resource_management: 'Static resource request per batch: 1 GPU, 10 CPU cores, 100G RAM, 4h walltime; Auto3D configured
+        with mpi_np=10 and memory=64 (internal).'
+      monitoring: Intended monitoring via per-batch benchmark JSONs and a status aggregation script producing finished/failed/missing
+        lists; no active health checks or auto-resubmission.
+      result_collection: Per-prefix outputs written as {PREFIX}.sdf and {PREFIX}.smi; optional Auto3D.log copied for provenance;
+        separate collector script consolidates SDFs and builds a global SMILES/PREFIX map.
+      charge_mult: Not applicable (no charge/multiplicity logic present).
+    known_issues:
+    - scheduler: slurm
+      issue: 'Main driver script is truncated/incomplete: run_batch_auto3d() ends mid-loop; missing benchmark JSON writing,
+        missing completion of batch logic, and missing CLI/argparse subcommands required by README (''--batch-size'', ''--auto-batch-size'')
+        and by generated sbatch scripts (''run-batch ...''). Workflow cannot run end-to-end as provided.'
+      fix: 'Restore full driver implementation: complete run_batch_auto3d loop, implement benchmark JSON emission matching
+        get_auto3d_calc_status.py schema, and add argparse CLI with top-level batching mode and ''run-batch'' subcommand.'
+      pattern: Keep downstream status/triage tools schema-locked to the producer; add contract tests that generate a sample
+        benchmark JSON and validate parsing.
+    - scheduler: slurm
+      issue: Conda environment spec file auto3d_conda_package_260113.yaml referenced in README is missing; without it Auto3D
+        import may fail and computations will be skipped (_AUTO3D_AVAILABLE=False).
+      fix: Include the conda env YAML in the plugin or document exact pip/conda install commands and pinned versions; add
+        a startup check that errors loudly if Auto3D is unavailable.
+      pattern: Bundle environment manifests with workflow plugins; fail-fast on missing critical dependencies.
+    - scheduler: slurm
+      issue: 'Path mismatch breaks retry loop: get_auto3d_calc_status.py BENCH_DIR points to geo_data_out_path_rd_4/... while
+        driver uses ./geo_data_out_path/.... Status script will report no benchmark JSONs even if jobs ran.'
+      fix: Parameterize BENCH_DIR and ORIGINAL_SMILES_PATH via CLI args; default to the same base output directory used by
+        the driver.
+      pattern: Avoid hardcoded round-specific paths; use a single configurable run root shared by all utilities.
+    - scheduler: slurm
+      issue: Status script assumes a benchmark JSON schema that the driver (as provided) does not actually produce due to
+        truncation; even with a restored driver, schema drift will cause incorrect finished/failed/missing outputs.
+      fix: Define and version the benchmark JSON schema; emit required fields (counts, completed_smiles, per_smiles_status,
+        elapsed_hms, slurm metadata, batch_json_path).
+      pattern: Schema versioning + validation for inter-script data exchange.
+    - scheduler: slurm
+      issue: Manual code edits required for ORIGINAL_SMILES_PATH and output naming in get_auto3d_calc_status.py; brittle across
+        multiple rounds/input files.
+      fix: Add argparse options for input smiles file, bench dir, and output prefix; write outputs into a run-specific directory.
+      pattern: All operational scripts should be CLI-driven, not edited per run.
+    glue_strategy: 'File-based glue: batch JSON dicts and benchmark JSONs connect submission/execution to post-run status
+      aggregation; per-molecule .smi files provide provenance for later collection.'
+    reusable_for:
+    - GPU-accelerated per-molecule structure generation workflows that need batching, SLURM submission generation, and iterative
+      retry based on finished/failed/missing sets
+    - Any pipeline that fans out multi-record SDF outputs into per-identifier files using SDF title fields as keys
+    - Large-scale dataset generation where provenance mapping (input ID -> output file) must be preserved and later consolidated
+    _status: complete
+  DFT-COPT-TSOPT-CRC-SGE:
+    input_type: reaction_xyz_triplet
+    input_format: 'Per reaction: three XYZ geometries (reactant R.xyz, product P.xyz, transition-state guess TS.xyz) plus
+      per-job config.json containing ORCA settings and charge/multiplicity; optionally a reaction_info.txt table to generate
+      jobs.'
+    output_type: dft_verification_results
+    output_format: 'Per job directory: output/workflow_status.json with stage statuses and thermochemistry-derived barriers/energies,
+      ORCA input/output files under output/dft/, and an output/results.tar.gz archive; final_status.json copied to job root.'
+    computation:
+      tool: "ORCA DFT via containerized dft_workflow (COPT\u2192TSOPT\u2192IRC\u2192endpoint OPT)"
+      type: container
+      container: Apptainer/Singularity SIF providing /opt/dft_workflow/run_dft_workflow.sh, ORCA installation (/opt/orca),
+        and optional YARP/OpenBabel for BEM/bond-change detection
+      container_interface:
+        image_path: /groups/bsavoie2/zli43/dft_tsopt_irc_after_ssmirc-v4-fixed-OPT.sif
+        runtime: singularity exec (Apptainer-compatible)
+        entrypoints:
+        - path: /opt/dft_workflow/run_dft_workflow.sh
+          purpose: Sets up conda/env + ORCA + MPI settings, then runs the Python workflow
+        - path: /opt/dft_workflow/run_dft_verification.py
+          purpose: Main workflow script inside container; overridden by bind-mount in this plugin
+        bind_mounts_used:
+        - host: ${JOB_DIR}
+          container: /work/input
+          mode: ro
+          purpose: Read-only access to per-job inputs (R.xyz/P.xyz/TS.xyz/config.json)
+        - host: ${OUTPUT_DIR}
+          container: /work/output
+          mode: rw
+          purpose: Write preprocessing outputs (workflow_status.json, ts_guess.xyz)
+        - host: ${OUTPUT_DIR}
+          container: /work
+          mode: rw
+          purpose: Working directory for main workflow; contains results.tar.gz and outputs
+        - host: ${SCRIPTS_DIR}
+          container: /work/scripts
+          mode: ro
+          purpose: Provide external preprocessing script xyz_prep.py
+        - host: ${SCRIPTS_DIR}/run_dft_verification.py
+          container: /opt/dft_workflow/run_dft_verification.py
+          mode: ro
+          purpose: Override container workflow with plugin-custom version supporting config.json
+        - host: /opt/sge
+          container: /opt/sge
+          mode: rw
+          purpose: Expose SGE runtime inside container (cluster-specific integration)
+      key_features:
+      - 'Two-phase execution: preprocessing (BEM/bond-change detection) then full DFT workflow'
+      - "Array-job orchestration over reaction\xD7config combinations via job_list.txt indexing"
+      - Config-driven ORCA keyword/basis/grid selection (original vs r2scan templates)
+      - Automatic identification of sigma bond changes to drive constrained optimization and basis-set focusing
+      - 'Per-atom mixed basis assignment: high basis on metals + reactive atoms; low basis elsewhere'
+      - 'Standardized outputs: workflow_status.json + results.tar.gz for downstream collection'
+    scheduler_tested:
+    - sge
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Assumes shared filesystem visible to compute nodes; uses SGE $SGE_O_WORKDIR, writes to ./jobs/<job>/output
+        and ./logs; references absolute shared path to container under /groups/...
+      container_delivery: local_path
+      container_path: /groups/bsavoie2/zli43/dft_tsopt_irc_after_ssmirc-v4-fixed-OPT.sif
+      mpi: inside_container
+      mpi_scheduler_integration: SGE parallel environment provides NSLOTS; passed as --nprocs ${NSLOTS:-16} to container workflow.
+        Container script is expected to configure OpenMPI/ORCA accordingly.
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - SGE environment variables available (SGE_TASK_ID, SGE_O_WORKDIR, NSLOTS)
+      - Apptainer/Singularity installed on execution hosts
+      - "Cluster-specific bind of /opt/sge into container (required by this site\u2019s ORCA/MPI integration)"
+      - Container must include ORCA and /opt/dft_workflow/run_dft_workflow.sh
+      - 'For preprocessing: container should include YARP at /opt/yarp (or compatible python modules) or OpenBabel python
+        bindings as fallback'
+      - Python3 available on host for setup_jobs.sh inline JSON editing and for check_status.py
+    files:
+      README.md:
+        role: config
+        description: User-facing runbook describing the DFT verification pipeline, directory layout, reactions/configs tested,
+          expected outputs, and troubleshooting/resource guidance.
+        concepts:
+        - name: verification_pipeline_stages
+          description: "Defines the intended computational stages: COPT \u2192 TSOPT \u2192 IRC \u2192 endpoint optimizations,\
+            \ and what success metrics are extracted."
+          transferable: true
+          lines: 1-80
+        - name: reaction_matrix_testing
+          description: Runs multiple reactions under multiple ORCA configurations (original vs r2scan) to compare robustness/energetics.
+          transferable: true
+          lines: 9-33
+        - name: expected_artifacts_contract
+          description: Specifies output files and key JSON fields (barriers, reaction energies) used for monitoring and validation.
+          transferable: true
+          lines: 63-104
+      check_status.py:
+        role: operational
+        description: Scans jobs/* directories, loads final_status.json or output/workflow_status.json, prints a colored table
+          of stage statuses and key energy metrics; summarizes completed/failed/pending.
+        concepts:
+        - name: status_file_fallback
+          description: Tries multiple status locations (job root copy vs output directory) to be resilient to partial runs.
+          transferable: true
+          lines: 10-33
+        - name: stage_status_normalization
+          description: Maps missing/absent keys to not_found/not_run to support consistent reporting.
+          transferable: true
+          lines: 36-55
+        - name: metric_extraction
+          description: Extracts forward/reverse barriers and reaction energy from dft_irc block.
+          transferable: true
+          lines: 58-74
+        - name: cli_dashboard_pattern
+          description: Produces a compact CLI dashboard with summary counts and failure reasons.
+          transferable: true
+          lines: 77-156
+      scripts/run_dft_verification.py:
+        role: driver
+        description: "Intended to be bind-mounted over the container\u2019s workflow script to add config.json support and\
+          \ implement ORCA input generation, basis assignment, and stage orchestration. Provided content includes config loading,\
+          \ XYZ utilities, bond-change parsing, metal detection, basis assignment, and partial ORCA input writers; file is\
+          \ truncated in provided snapshot."
+        concepts:
+        - name: config_merge_with_defaults
+          description: Loads config.json and merges only known keys into defaults (orca settings + charge/mult + nprocs/maxcore).
+          transferable: true
+          lines: 44-112
+        - name: multi_xyz_trajectory_parsing
+          description: Parses multi-frame XYZ trajectories and extracts last geometry for restart/continuation.
+          transferable: true
+          lines: 146-214
+        - name: sigma_bond_change_filtering
+          description: Interprets bond_changes strings and filters to sigma changes only (formation/breaking vs pi changes).
+          transferable: true
+          lines: 222-333
+        - name: reactive_atom_selection
+          description: Defines reactive atoms as those involved in sigma bond changes; used for constraints and basis focusing.
+          transferable: true
+          lines: 300-333
+        - name: metal_detection_by_element_set
+          description: Detects metal atoms via a predefined element set and optionally finds neighbors by distance.
+          transferable: true
+          lines: 340-395
+        - name: mixed_basis_assignment
+          description: Assigns high basis to metals + reactive atoms and low basis to remaining atoms; prints assignment summary.
+          transferable: true
+          lines: 398-444
+        - name: orca_input_generation_with_per_atom_basis
+          description: Generates ORCA coordinate blocks using per-atom 'newgto' directives and builds COPT/TSOPT input templates.
+          transferable: true
+          lines: 452-560
+      scripts/xyz_prep.py:
+        role: adapter
+        description: Preprocessing script executed inside the container to validate XYZ consistency, compute BEMs (YARP/OpenBabel
+          fallback), detect bond changes, and write workflow_status.json + ts_guess.xyz. Provided content includes core functions
+          but is truncated before CLI/argparse entrypoint.
+        concepts:
+        - name: read_only_input_workaround
+          description: Copies XYZ to a temporary writable directory when YARP requires writing alongside inputs (handles bind-mounted
+            read-only inputs).
+          transferable: true
+          lines: 55-140
+        - name: bem_fallback_chain
+          description: Attempts BEM via yarp_helpers, then Yarpecule, then OpenBabel; continues with warnings if unavailable.
+          transferable: true
+          lines: 92-190
+        - name: bond_change_format_contract
+          description: Encodes bond changes as 'ElemI- ElemJ:old>new' with 'n' for no bond; counts sigma changes.
+          transferable: true
+          lines: 206-270
+        - name: input_consistency_validation
+          description: Validates atom counts and element ordering across R/P/TS; fails fast with detailed diffs.
+          transferable: true
+          lines: 290-360
+        - name: bem_sanity_checks
+          description: Flags no_changes as error; warns on zero sigma changes or excessive changes.
+          transferable: true
+          lines: 363-410
+        - name: workflow_status_seed
+          description: Creates minimal workflow_status.json with input_data (charge/mult/bond_changes) and preprocessing status.
+          transferable: true
+          lines: 418-455
+        - name: ts_guess_generation
+          description: Copies TS.xyz to ts_guess.xyz and copies R/P into output for downstream packaging.
+          transferable: true
+          lines: 470-540
+      setup_jobs.sh:
+        role: entry_point
+        description: "Creates per-job directories for each reaction\xD7config, copies standardized XYZ inputs from a test\
+          \ dataset, injects charge/mult into per-job config.json, and writes job_list.txt for SGE array submission."
+        concepts:
+        - name: reaction_table_driven_batching
+          description: Uses reaction_info.txt (tab-separated rxn_name, charge, mult) to parameterize job creation.
+          transferable: true
+          lines: 20-63
+        - name: cartesian_product_job_generation
+          description: Generates jobs for each reaction across multiple config templates (original, r2scan).
+          transferable: true
+          lines: 66-128
+        - name: inline_json_patch
+          description: Uses an embedded python snippet to add charge/mult into a base config template.
+          transferable: true
+          lines: 104-123
+        - name: array_index_manifest
+          description: Writes job_list.txt to map SGE_TASK_ID to a job directory name.
+          transferable: true
+          lines: 56-133
+      sge_dft_pipeline.sh:
+        role: driver
+        description: 'SGE array submission script: selects job by SGE_TASK_ID, runs preprocessing in container, packages inputs
+          into results.tar.gz, runs container workflow with bind-mounted custom Python, logs stdout/stderr per task, and copies
+          final status back to job root.'
+        concepts:
+        - name: array_job_indexing
+          description: Maps SGE_TASK_ID to job name via sed line selection from job_list.txt.
+          transferable: true
+          lines: 52-79
+        - name: container_bind_mount_pattern
+          description: Separates read-only inputs (/work/input) from writable outputs (/work/output or /work) to avoid permission
+            issues.
+          transferable: true
+          lines: 95-123
+        - name: two_phase_pipeline
+          description: Runs xyz_prep.py first to generate workflow_status.json and ts_guess.xyz, then runs full DFT workflow.
+          transferable: true
+          lines: 88-176
+        - name: tarball_handshake_interface
+          description: Creates results.tar.gz containing ts_guess.xyz, workflow_status.json, and inputs; passes it to container
+            workflow as --input.
+          transferable: true
+          lines: 178-208
+        - name: workflow_override_by_bind_mount
+          description: "Bind-mounts plugin\u2019s run_dft_verification.py over container\u2019s version to customize behavior\
+            \ without rebuilding container."
+          transferable: true
+          lines: 214-252
+        - name: centralized_logging
+          description: Redirects stdout/stderr to logs/dft_${SGE_TASK_ID}.out/.err for array tasks.
+          transferable: true
+          lines: 33-41
+        - name: final_status_promotion
+          description: Copies output/workflow_status.json to job root as final_status.json for easier monitoring.
+          transferable: true
+          lines: 266-274
+      .golddigrignore:
+        role: config
+        description: Excludes large job directories, test datasets, and heavy ORCA artifacts from packaging/ingestion.
+        concepts:
+        - name: artifact_exclusion
+          description: Ignore patterns for binary/large outputs (gbw/hess/trj) and job/test directories.
+          transferable: true
+          lines: 1-18
+    patterns:
+      input_adaptation: "Standardize upstream geometries into per-job R.xyz/P.xyz/TS.xyz; preprocessing computes BEM-derived\
+        \ bond_changes and seeds output/workflow_status.json + ts_guess.xyz; then package into results.tar.gz as the container\
+        \ workflow\u2019s single input artifact."
+      job_submission: SGE array job; job_list.txt provides deterministic mapping from SGE_TASK_ID to job directory; per-task
+        logs written to logs/.
+      resource_management: Fixed PE smp 16 and maxcore 4000 MB/core passed to ORCA; walltime requested via h_rt=72:00:00;
+        no dynamic escalation implemented.
+      monitoring: Out-of-band monitoring via check_status.py reading workflow_status.json/final_status.json; no auto-resubmission/health
+        daemon.
+      result_collection: 'Per job: output/ contains full artifacts and results.tar.gz; final_status.json copied to job root
+        for quick scanning; check_status.py aggregates across jobs.'
+      charge_mult: Primary source is per-job config.json created by setup_jobs.sh from reaction_info.txt; sge script reads
+        charge/mult from config.json and passes to preprocessing; workflow_status.json also stores charge/mult under input_data.
+    known_issues:
+    - scheduler: sge
+      issue: Plugin snapshot missing required configs/ templates (configs/config_original.json and configs/config_r2scan.json)
+        and reaction_info.txt; setup_jobs.sh hard-fails without them.
+      fix: Provide configs/ directory with the two template JSON files and include reaction_info.txt (tab-separated rxn_name,
+        charge, mult).
+      pattern: Batch setup scripts should validate and/or ship required templates and parameter tables.
+    - scheduler: sge
+      issue: "scripts/run_dft_verification.py is truncated mid-function; bind-mounting it over the container\u2019s workflow\
+        \ will cause immediate Python syntax/import failure."
+      fix: Ensure the full run_dft_verification.py is included with complete CLI/argparse and stage implementations before
+        overriding container script.
+      pattern: When overriding container entrypoints, the override must be complete and version-matched to container expectations.
+    - scheduler: sge
+      issue: scripts/xyz_prep.py is truncated and lacks argparse CLI; sge_dft_pipeline.sh calls it with flags, so preprocessing
+        will fail.
+      fix: Add a main() with argparse supporting --reactant/--product/--ts/--charge/--mult/--output/--prep-only and call process_xyz_inputs().
+      pattern: External preprocessing adapters must expose stable CLIs because batch scripts treat them as binaries.
+    - scheduler: sge
+      issue: 'Path/layout mismatch risk: sge_dft_pipeline.sh bind-mounts ${PIPELINE_DIR}/scripts/xyz_prep.py and scripts/run_dft_verification.py;
+        if files are not located under scripts/, container execution fails.'
+      fix: Enforce repository layout with scripts/ subdirectory or update bind paths in sge_dft_pipeline.sh accordingly.
+      pattern: Keep on-disk layout consistent with bind-mount assumptions; add preflight checks.
+    - scheduler: sge
+      issue: 'Container dependency coupling: workflow assumes /opt/dft_workflow/run_dft_workflow.sh exists and calls /opt/dft_workflow/run_dft_verification.py;
+        if container differs, Step 3 fails.'
+      fix: Pin and document container version; add a preflight singularity exec test for required paths.
+      pattern: Treat container as an API; validate required entrypoints before submitting arrays.
+    - scheduler: sge
+      issue: YARP BEM may fail if /opt/yarp not present; preprocessing may degrade to OpenBabel or fail to detect meaningful
+        bond changes.
+      fix: Use a container that includes YARP or ensure OpenBabel python bindings are installed; optionally allow user-specified
+        bond_changes override.
+      pattern: Provide graceful fallbacks and clear warnings for optional chemistry toolchains.
+    glue_strategy: SGE bash driver orchestrates a two-step container run (preprocess then full workflow) using bind-mount
+      overrides and a tarball handoff artifact.
+    reusable_for:
+    - Any containerized quantum chemistry workflow needing scheduler array orchestration with per-task directory inputs and
+      centralized logs
+    - Workflows that need a preprocessing adapter to compute reaction metadata (bond changes/reactive atoms) before running
+      expensive calculations
+    - Pipelines that override container-internal Python modules via bind-mount to customize behavior without rebuilding images
+    - Mixed-basis ORCA workflows that focus higher-level basis on metals and reactive centers inferred from reaction changes
+    _status: incomplete
+    _unresolved:
+    - opt/dft_workflow/scripts/xyz_prep.py
+    - work/scripts/xyz_prep.py
+  xtb-freq-tsopt-irc-spinwbo-yarp-sankey:
+    input_type: xyz
+    input_format: One XYZ geometry per file (from golddigr extraction). XYZ comment line may optionally encode charge; otherwise
+      workflow samples charges -1/0/+1.
+    output_type: 'Per-input TS/IRC characterization bundle: TSOPT+IRC outputs zipped per (structure, charge, mult); optional
+      post-processing adds xTB spin/WBO scan tables, YARP BEM/adjacency per-frame artifacts, and Sankey HTML/SVG diagrams;
+      plus cross-zip JSONL summaries.'
+    computation:
+      tool: xTB + Pysisyphus + YARP (post-processing) + Plotly Sankey builder
+      type: script
+      container: none (module+conda based execution on SLURM cluster)
+      key_features:
+      - Charge sampling across -1/0/+1 with multiplicity inferred from electron parity
+      - TS optimization (RS-P-RFO) and IRC (Euler predictor-corrector) via Pysisyphus using xTB backend
+      - Post-hoc spin-polarized xTB scan along IRC frames with WBO extraction and reactive summary CSVs
+      - YARP bond-electron matrix (BEM) and adjacency extraction per frame; TS frame detection from max energy in IRC trajectory
+      - Electron-transport Sankey diagrams from BEM time series; optional SVG export
+    scheduler_tested:
+    - slurm
+    infrastructure:
+      filesystem: shared
+      filesystem_details: Assumes shared POSIX filesystem visible to submit host and compute nodes; workflows use absolute
+        paths listed in text files and rely on sbatch/squeue plus zip/unzip operating on shared directories.
+      container_delivery: none
+      container_path: ''
+      mpi: host_openmpi
+      mpi_scheduler_integration: No explicit mpirun/srun usage; OpenMPI module is loaded but Pysisyphus parallelism is via
+        'pal' setting and xTB internal threading; SLURM ntasks-per-node=1 in templates.
+      gpu_required: false
+      internet_required: false
+      special_requirements:
+      - 'Environment modules: conda/anaconda, intel-mkl, openmpi'
+      - 'Conda envs referenced: copy-classy-yarp (submission utilities) and another-yarp (runtime)'
+      - 'External executables required on PATH: xtb, pysis (Pysisyphus CLI), zip, unzip'
+      - 'Python packages required: yarp, numpy, pandas, tqdm, plotly (and kaleido optional for SVG export)'
+    files:
+      README.md:
+        role: config
+        description: "Human-facing overview of intended pipeline stages (xTB freq \u2192 TSOPT \u2192 IRC \u2192 spin/WBO\
+          \ \u2192 YARP \u2192 Sankey), charge/multiplicity policy, and HPC module/conda expectations."
+        concepts:
+        - name: stage_gating
+          description: Defines conceptual gates (imag freq threshold, file existence) for progressing between stages.
+          transferable: true
+          lines: approx. 10-45
+        - name: charge_multiplicity_policy
+          description: Use charge from XYZ comment if present; else sample -1/0/+1; multiplicity chosen as lowest allowed.
+          transferable: true
+          lines: approx. 47-60
+      plugin.yaml:
+        role: config
+        description: Machine-readable manifest describing stages, gates, charge strategy, and declared outputs.
+        concepts:
+        - name: manifest_stage_model
+          description: Declarative stage list with gate types (imaginary_freq, file_exists, directory_exists).
+          transferable: true
+          lines: approx. 1-45
+        - name: declared_outputs_contract
+          description: Enumerates expected artifacts across TSOPT/IRC, xTB-scan, IRC_Analysis, and Sankey.
+          transferable: true
+          lines: approx. 46-75
+      scripts/5_master_workflow.sh:
+        role: driver
+        description: 'Primary SLURM submission driver: reads a list of XYZ base paths, loops charges -1/0/+1, computes multiplicity,
+          creates per-(charge,mult) workdir, fills Pysisyphus YAML templates and sbatch template, throttles submissions by
+          BATCHNAME job count, and submits TSOPT+IRC jobs that zip results and delete workdir.'
+        concepts:
+        - name: queue_throttling
+          description: Implements a simple job limiter by counting squeue jobs matching a batch prefix and sleeping until
+            below limit.
+          transferable: true
+          lines: approx. 20-120
+        - name: job_dedup_by_name
+          description: Avoids duplicate submissions by grepping squeue job names for an exact suffix match.
+          transferable: true
+          lines: approx. 70-105
+        - name: template_substitution
+          description: Uses sed and bash string replacement to fill charge/mult and job name placeholders in YAML and sbatch
+            templates.
+          transferable: true
+          lines: approx. 105-150
+        - name: charge_sampling_loop
+          description: Runs three independent charge states per structure when charge not embedded in XYZ.
+          transferable: true
+          lines: approx. 55-160
+      scripts/6_restart_untouched.sh:
+        role: driver
+        description: 'Restart driver for untouched jobs: reads full job directory paths, parses charge/multiplicity from directory
+          naming convention, reconstructs original XYZ path, regenerates templates, throttles and submits.'
+        concepts:
+        - name: path_parsing_convention
+          description: Parses FULL_DIR_PATH formatted as <base>_<charge>_<mult> to recover inputs.
+          transferable: true
+          lines: approx. 35-95
+        - name: restart_idempotency_by_zip
+          description: Skips jobs if final .zip exists; cleans stale directories before resubmission.
+          transferable: true
+          lines: approx. 95-170
+      scripts/7_restart_crashed.sh:
+        role: driver
+        description: "Restart driver for crashed jobs: reads crashed job dirs, requires a '-crashed.zip' marker, deletes stale\
+          \ dir and crashed archive, resubmits with modified queue/walltime by editing template content (standby\u2192normal;\
+          \ 4h\u2192168h)."
+        concepts:
+        - name: resource_escalation_by_template_patch
+          description: Edits sbatch script text to change partition/qos and walltime for reruns.
+          transferable: true
+          lines: approx. 90-170
+        - name: crash_marker_archive
+          description: Uses presence of <job>-crashed.zip as a manual crash indicator to trigger restart.
+          transferable: true
+          lines: approx. 40-90
+      scripts/calculate_mult.py:
+        role: operational
+        description: Computes lowest multiplicity (1 if even electrons else 2) from XYZ atom list and integer charge.
+        concepts:
+        - name: electron_parity_multiplicity
+          description: Multiplicity heuristic based on total electron parity after charge adjustment.
+          transferable: true
+          lines: approx. 1-85
+        - name: atomic_number_lookup
+          description: "Element\u2192Z dictionary for electron counting."
+          transferable: true
+          lines: approx. 10-45
+      scripts/compute_sco_wbo_stats.py:
+        role: operational
+        description: 'Aggregates statistics from SCO_WBO_summary.jsonl: alignment of TS frame and spin-crossover frames with
+          top bond-slope event frames.'
+        concepts:
+        - name: topk_event_alignment_metrics
+          description: Computes % of cases where a reference frame lies in union of top-1/2/3 event frames.
+          transferable: true
+          lines: approx. 1-140
+      scripts/irc_sankey_zoomsvg_fixed.py:
+        role: operational
+        description: Builds Sankey diagrams (transport and two-rail) from per-frame BEM/AM matrices; supports aggregation
+          toggles and SVG export via kaleido; reads ts_frame and frame matrices under IRC_Analysis.
+        concepts:
+        - name: bem_to_transport_flow
+          description: Derives electron ownership flow by solving a minimum-norm flow on an incidence matrix using dR constraints.
+          transferable: true
+          lines: approx. 1-220
+        - name: bem_parsing_heuristics
+          description: Loads labelled matrices from CSV; heuristically detects whether off-diagonals are V or 2V and rescales.
+          transferable: true
+          lines: approx. 20-120
+        - name: sankey_link_pruning
+          description: Keeps topK links above min_frac of total; aggregates remainder optionally.
+          transferable: true
+          lines: approx. 220-340
+      scripts/metal_ligand/__init__.py:
+        role: adapter
+        description: Package marker for metal_ligand helpers used by YARP analysis.
+        concepts: []
+      scripts/metal_ligand/yarp_helpers.py:
+        role: adapter
+        description: 'Utility wrappers for YARP: silent yarpecule creation with optional explicit charge; small helpers for
+          bond state and labelled matrices.'
+        concepts:
+        - name: silent_wrapper
+          description: Redirects stdout/stderr to /dev/null to keep batch logs clean while calling yarp.yarpecule.
+          transferable: true
+          lines: approx. 1-35
+        - name: charge_override_api
+          description: Supports yarpecule input as path, (path,charge) tuple, or charge kwarg.
+          transferable: true
+          lines: approx. 5-30
+      scripts/new-check_job_status.sh:
+        role: monitoring
+        description: Scans expected job outputs for each (xyz,charge,mult) and classifies as finished (.zip exists), crashed
+          (dir exists or -crashed.zip exists), or untouched; writes finished.txt/crashed.txt/untouched.txt.
+        concepts:
+        - name: triage_lists
+          description: Produces file lists used by restart scripts and downstream analysis submission.
+          transferable: true
+          lines: approx. 25-140
+        - name: status_heuristics
+          description: Finished determined by <job>.zip; crashed by leftover dir or manual crashed zip.
+          transferable: true
+          lines: approx. 90-135
+      scripts/run_analysis.sh:
+        role: driver
+        description: 'Post-processing driver over .zip results: for each zip containing finished_irc.trj and lacking xTB-scan/,
+          extracts trajectory to temp dir, runs spin_wbo_scan.py, then updates the zip with new xTB-scan/ outputs and cleans
+          up.'
+        concepts:
+        - name: inplace_zip_augmentation
+          description: Uses unzip to extract minimal inputs, runs analysis, then zip -u to append new folders back into the
+            original archive.
+          transferable: true
+          lines: approx. 60-170
+        - name: charge_from_filename
+          description: Parses charge token from zip basename formatted as <...>_<charge>_<mult>.zip.
+          transferable: true
+          lines: approx. 80-115
+        - name: idempotent_skip_by_zip_listing
+          description: Skips already-processed zips by checking for xTB-scan/ in unzip -l output.
+          transferable: true
+          lines: approx. 115-140
+      scripts/spin_wbo_scan.py:
+        role: entry_point
+        description: 'Runs two-pass xTB along IRC frames: pass1 spin-polarized tblite energies across UHF values; pass2 standard
+          xTB properties (WBO, populations); writes per-frame BEM-like CSVs and summary tables; includes reactive summary
+          extraction.'
+        concepts:
+        - name: two_pass_xtb_strategy
+          description: Separate fast spin energy scan (tblite + spinpol) from property extraction (wbo/pop) for selected spin
+            states.
+          transferable: true
+          lines: approx. 1-220
+        - name: bem_csv_emission
+          description: Writes frame_#####_bond_electrons.csv (2*WBO off-diag; diagonal from nominal valence minus incident
+            WBO) and frame_#####_bond_orders.csv.
+          transferable: true
+          lines: approx. 120-210
+        - name: reactive_summary_timeseries
+          description: "Builds reactive_summary.csv as a transposed time series for entries with |\u0394| above threshold\
+            \ between first/last frames."
+          transferable: true
+          lines: approx. 40-120
+        - name: wbo_parser_robustness
+          description: Parses xTB .wbo in either pair-list or matrix form.
+          transferable: true
+          lines: approx. 220-330
+      scripts/submit_irc_analysis_from_finished.sh:
+        role: driver
+        description: 'Submits per-parent-folder IRC analysis jobs for zips listed in finished.txt: detects zips needing IRC_Analysis
+          and containing finished_irc.trj; throttles by BATCHNAME; fills irc_analysis.submit.template placeholders and sbatch
+          submits.'
+        concepts:
+        - name: parent_folder_batching
+          description: Groups many TS zips under a parent directory and submits one analysis job per parent to amortize scheduler
+            overhead.
+          transferable: true
+          lines: approx. 20-120
+        - name: needs_work_detection_by_zip_listing
+          description: Uses unzip -l to check for required members and skip already-processed archives.
+          transferable: true
+          lines: approx. 45-95
+      scripts/summarize_sco_wbo.py:
+        role: operational
+        description: Scans parent directories derived from finished.txt; for each zip containing xTB-scan/reactive_summary.csv,
+          computes TS frame from finished_irc.trj (max energy) and top bond-slope events; optionally includes spin crossover
+          frames; writes SCO_WBO_summary.jsonl.
+        concepts:
+        - name: ts_frame_from_trj_energy
+          description: Defines TS frame as the frame with maximum energy parsed from XYZ comment line in finished_irc.trj.
+          transferable: true
+          lines: approx. 60-140
+        - name: central_difference_slope_ranking
+          description: Computes per-frame slopes via forward/backward/central differences and ranks by |slope| to find top
+            events.
+          transferable: true
+          lines: approx. 140-240
+        - name: zip_member_discovery
+          description: Finds members by suffix matching and xTB-scan/ subpath matching.
+          transferable: true
+          lines: approx. 40-90
+      scripts/yarp_results_builder.py:
+        role: entry_point
+        description: Processes finished_first/finished_last/finished_irc plus TS geometry; computes YARP adjacency and bond-electron
+          matrices per frame; writes IRC_Analysis tree with JSON and labelled CSVs; identifies TS frame in IRC by max energy
+          and writes ts_frame.txt; supports idempotent skipping and optional explicit charge.
+        concepts:
+        - name: framewise_yarp_analysis
+          description: Converts each frame to a temporary XYZ and runs yarp.yarpecule to obtain adjacency and bond-electron
+            matrices.
+          transferable: true
+          lines: approx. 1-220
+        - name: idempotent_frame_outputs
+          description: Skips recomputation when JSON+CSV outputs already exist unless overwrite is requested.
+          transferable: true
+          lines: approx. 160-220
+        - name: ts_source_preference
+          description: Prefers ts_final_geometry.xyz; falls back to input.xyz; also records initial-TS if present.
+          transferable: true
+          lines: approx. 120-160
+      templates/TSOPT-IRC_yaml.template:
+        role: config
+        description: Pysisyphus YAML template for IRC (eulerpc) starting from ts_final_geometry.xyz; placeholders for charge
+          and multiplicity; sets pal=6 and mem=4000.
+        concepts:
+        - name: pysisyphus_irc_config
+          description: Defines forward/backward IRC with end optimization settings.
+          transferable: true
+          lines: approx. 1-20
+      templates/TSOPT_yaml.template:
+        role: config
+        description: Pysisyphus YAML template for TS optimization (rsprfo) starting from input.xyz; placeholders for charge
+          and multiplicity; sets pal=6 and mem=4000.
+        concepts:
+        - name: pysisyphus_tsopt_config
+          description: Defines RS-P-RFO TS optimization with Hessian recalculation.
+          transferable: true
+          lines: approx. 1-18
+      templates/irc_analysis.submit.template:
+        role: config
+        description: SLURM batch script template to run yarp_results_builder.py and irc_sankey_zoomsvg_fixed.py over all zips
+          in a parent directory; extracts minimal files from each zip, runs analysis, and appends IRC_Analysis back into the
+          zip.
+        concepts:
+        - name: zip_extract_minimal_inputs
+          description: Uses unzip -oqj to extract only required files into a temporary work_dir per zip.
+          transferable: true
+          lines: approx. 45-95
+        - name: failure_tolerant_loop
+          description: Continues to next zip if Sankey generation fails; guards zip update failures.
+          transferable: true
+          lines: approx. 95-150
+        - name: script_location_via_env
+          description: Expects $PKG_DIR to locate plugin scripts.
+          transferable: true
+          lines: approx. 25-45
+      templates/job_tsopt.submit.template:
+        role: config
+        description: SLURM batch script template for TSOPT then IRC; performs cleanup, runs pysis TSOPT.yaml and TSOPT-IRC.yaml,
+          then zips the run directory and deletes it.
+        concepts:
+        - name: cleanup_before_after
+          description: Aggressively removes intermediate qm_calcs and trajectory artifacts to keep zip small.
+          transferable: true
+          lines: approx. 20-60
+        - name: zip_and_delete_workdir
+          description: Archives results as <DIR_NAME>.zip and removes the directory to reduce filesystem load.
+          transferable: true
+          lines: approx. 70-95
+      templates/spin_bo.submit.template:
+        role: config
+        description: SLURM batch script template to run run_analysis.sh over a specified parent directory (FILEPATH placeholder)
+          to add xTB-scan outputs into zips.
+        concepts:
+        - name: posthoc_analysis_batch_job
+          description: Runs analysis as a separate scheduled job rather than inline with TSOPT/IRC.
+          transferable: true
+          lines: approx. 1-30
+      environment.yml:
+        role: config
+        description: Conda environment specification (another-yarp) including scientific Python stack and some chemistry tools;
+          appears incomplete/truncated relative to runtime needs.
+        concepts:
+        - name: conda_env_pin
+          description: Pins Python=3.9 and key libraries (numpy/pandas/scipy/matplotlib, openbabel, crest, dftd4).
+          transferable: true
+          lines: approx. 1-60
+    patterns:
+      input_adaptation: Treat each golddigr XYZ as a base path; create per-charge/multiplicity working directories named <base>_<charge>_<mult>,
+        copy XYZ to input.xyz, and fill Pysisyphus YAML templates with sed.
+      job_submission: Many independent SLURM jobs submitted via sbatch; submission throttled by counting squeue jobs with
+        a batch prefix; job names encode dataset index + block + molecule + charge to enable de-duplication.
+      resource_management: Manual escalation for crashed jobs by patching sbatch template content (partition/qos and walltime).
+        Pysisyphus resources set via pal/mem in YAML templates.
+      monitoring: 'Filesystem-based triage: finished if <job>.zip exists; crashed if leftover directory or -crashed.zip marker
+        exists; untouched otherwise. Queue de-duplication via squeue job-name grep.'
+      result_collection: Primary results are zipped per job and original work directories removed. Post-processing reopens
+        zips, extracts minimal files, appends new analysis folders back into the same zip (zip -u).
+      charge_mult: "Multiplicity computed as lowest allowed by electron parity (even\u21921, odd\u21922) given charge; charge\
+        \ either parsed externally (not implemented here) or sampled across -1/0/+1; some post-processing parses charge from\
+        \ zip filename token."
+    known_issues:
+    - scheduler: slurm
+      issue: 'Declared xtb_frequency stage is missing: no script/template produces xtb_freq.out, so imaginary-frequency gate
+        cannot be applied and manifest does not match implementation.'
+      fix: Add an xTB Hessian/frequency sbatch template and integrate it into the driver (or remove stage from manifest).
+        Ensure output file name matches gate (xtb_freq.out).
+      pattern: Keep manifest stages synchronized with actual drivers; every gate must have a producing step.
+    - scheduler: slurm
+      issue: No orchestrator consumes plugin.yaml; drivers submit TSOPT/IRC directly and do not implement stage gating across
+        the full pipeline.
+      fix: Implement a top-level orchestrator that reads plugin.yaml and runs stages conditionally, or update plugin.yaml
+        to reflect the actual operational flow (submit + posthoc analysis).
+      pattern: Declarative manifests require an executor; otherwise treat manifest as documentation only.
+    - scheduler: slurm
+      issue: 'Template path/name mismatch: scripts expect TSOPT.yaml.template, TSOPT-IRC.yaml.template, job_tsopt.submit.template
+        in CWD, but repository stores templates under templates/ with different names (underscores).'
+      fix: Standardize template names/locations or update scripts to reference templates/TSOPT_yaml.template etc.; add sanity
+        checks for template existence.
+      pattern: Avoid implicit CWD dependencies; resolve templates relative to script directory.
+    - scheduler: slurm
+      issue: 5_master_workflow.sh uses undefined variable XYZ_PATH when computing block name, producing empty/incorrect job
+        names and breaking queue de-duplication.
+      fix: Replace XYZ_PATH with XYZ_FILE_PATH (or PATH_NO_SLASH) and enable 'set -u' to catch undefined variables.
+      pattern: Enable strict bash modes in drivers to prevent silent name/logic corruption.
+    - scheduler: slurm
+      issue: irc_analysis.submit.template requires $PKG_DIR to locate scripts, but $PKG_DIR is not set by the template or
+        submitter; job fails sanity checks.
+      fix: Set PKG_DIR in the submit script (e.g., export PKG_DIR=/path/to/plugin) or embed absolute paths during template
+        substitution.
+      pattern: Do not rely on undeclared environment variables inside batch templates.
+    - scheduler: slurm
+      issue: Several Python entry points are truncated in the provided payload (spin_wbo_scan.py, yarp_results_builder.py,
+        irc_sankey_zoomsvg_fixed.py), making them syntactically incomplete.
+      fix: Ship complete scripts; add CI that runs 'python -m py_compile' on all python files.
+      pattern: Validate packaging integrity; compile-check prevents silent truncation regressions.
+    - scheduler: slurm
+      issue: environment.yml excerpt does not guarantee presence of xtb, pysisyphus CLI, or yarp Python package; runtime may
+        fail if not provided by modules/conda.
+      fix: Add explicit dependencies (conda/pip) or document required module loads and PATH expectations; add preflight checks
+        in batch scripts.
+      pattern: For HPC workflows, include a preflight that asserts required executables/imports.
+    glue_strategy: 'SLURM-first workflow: submit TSOPT/IRC jobs that self-archive to zip; later batch post-processing jobs
+      reopen zips, run analyses, and append results back into the same archives.'
+    reusable_for:
+    - Any high-throughput TS/IRC screening where each input geometry fans out over charge states and results are archived
+      per job
+    - Workflows that need scheduler throttling and de-duplication by job-name conventions
+    - Pipelines that post-process archived results in-place by extracting minimal members and updating the archive
+    - Framewise trajectory analysis producing per-frame matrices/JSON plus downstream visualization (e.g., Sankey) from time
+      series
+    workflow_graph:
+      entry_point: scripts/5_master_workflow.sh
+      per_job_runner: templates/job_tsopt.submit.template
+      nodes:
+      - id: charge_mult_derivation
+        type: adapter
+        tool: python
+        scripts:
+        - scripts/calculate_mult.py
+        templates: []
+        inputs:
+        - input.xyz
+        outputs:
+        - stdout(multiplicity)
+        description: Derive lowest multiplicity for a given XYZ and charge (electron parity rule).
+      - id: xtb_frequency
+        type: compute
+        tool: xtb
+        scripts: []
+        templates: []
+        inputs:
+        - input.xyz
+        outputs:
+        - xtb_freq.out
+        description: GFN2-xTB Hessian/frequency screening to detect imaginary mode TS candidates.
+      - id: tsopt
+        type: compute
+        tool: pysisyphus
+        scripts:
+        - templates/job_tsopt.submit.template
+        templates:
+        - path: templates/TSOPT_yaml.template
+          placeholders:
+          - CHARGE_PLACEHOLDER
+          - MULT_PLACEHOLDER
+        - path: templates/job_tsopt.submit.template
+          placeholders:
+          - JOBNAME_PLACEHOLDER
+          - XXX
+          - CHARGE_PLACEHOLDER
+        inputs:
+        - TSOPT.yaml
+        - input.xyz
+        outputs:
+        - ts_final_geometry.xyz
+        - XXX-tsopt.out
+        description: Pysisyphus RS-P-RFO TS optimization using xTB; writes optimized TS geometry.
+      - id: irc
+        type: compute
+        tool: pysisyphus
+        scripts:
+        - templates/job_tsopt.submit.template
+        templates:
+        - path: templates/TSOPT-IRC_yaml.template
+          placeholders:
+          - CHARGE_PLACEHOLDER
+          - MULT_PLACEHOLDER
+        inputs:
+        - TSOPT-IRC.yaml
+        - ts_final_geometry.xyz
+        outputs:
+        - finished_irc.trj
+        - finished_first.xyz
+        - finished_last.xyz
+        - XXX-irc.out
+        description: "Pysisyphus Euler predictor\u2013corrector IRC from optimized TS; writes trajectory and endpoints."
+      - id: spin_wbo_scan
+        type: analysis
+        tool: python
+        scripts:
+        - scripts/run_analysis.sh
+        - scripts/spin_wbo_scan.py
+        templates: []
+        inputs:
+        - finished_irc.trj
+        outputs:
+        - xTB-scan/
+        - xTB-scan/reactive_summary.csv
+        - xTB-scan/spin_scan_summary.csv
+        - xTB-scan/spin_crossover_frames.txt
+        - xTB-scan/frame_*_bond_electrons.csv
+        - xTB-scan/frame_*_bond_orders.csv
+        description: Two-pass spin-polarized xTB scan (tblite energy + standard props) and per-frame WBO/BEM CSV extraction
+          along IRC frames.
+      - id: irc_analysis_yarp
+        type: analysis
+        tool: yarp
+        scripts:
+        - scripts/yarp_results_builder.py
+        - scripts/metal_ligand/yarp_helpers.py
+        - templates/irc_analysis.submit.template
+        templates:
+        - path: templates/irc_analysis.submit.template
+          placeholders:
+          - JOBNAME_PLACEHOLDER
+          - FILEPATH
+          - PLACEHOLDER
+          - PKG_DIR
+        inputs:
+        - finished_first.xyz
+        - finished_last.xyz
+        - finished_irc.trj
+        - input.xyz
+        - ts_final_geometry.xyz
+        outputs:
+        - IRC_Analysis/
+        - IRC_Analysis/finished_first/frame_00000.json
+        - IRC_Analysis/finished_last/frame_00000.json
+        - IRC_Analysis/finished_irc/ts_frame.txt
+        - IRC_Analysis/*/frame_*.json
+        - IRC_Analysis/*/frame_*_adjacency.csv
+        - IRC_Analysis/*/frame_*_bond_electrons.csv
+        description: Run YARP yarpecule-based adjacency + bond-electron matrix analysis for endpoints/TS/IRC frames; detect
+          TS frame by max energy in finished_irc.trj.
+      - id: sankey
+        type: visualization
+        tool: python
+        scripts:
+        - scripts/irc_sankey_zoomsvg_fixed.py
+        - templates/irc_analysis.submit.template
+        templates: []
+        inputs:
+        - IRC_Analysis/finished_irc/ts_frame.txt
+        - IRC_Analysis/finished_irc/frame_*_bond_electrons.csv
+        - IRC_Analysis/finished_irc/frame_*_adjacency.csv
+        outputs:
+        - IRC_Analysis/sankey/
+        description: Generate electron-transport Sankey diagrams from BEM time series around TS window.
+      - id: summarize_sco_wbo
+        type: stats
+        tool: python
+        scripts:
+        - scripts/summarize_sco_wbo.py
+        templates: []
+        inputs:
+        - finished.txt
+        - '*.zip'
+        outputs:
+        - SCO_WBO_summary.jsonl
+        description: Aggregate per-zip TS frame, reactive bond slope events, and spin-crossover frames into JSONL summary.
+      - id: compute_sco_wbo_stats
+        type: stats
+        tool: python
+        scripts:
+        - scripts/compute_sco_wbo_stats.py
+        templates: []
+        inputs:
+        - SCO_WBO_summary.jsonl
+        outputs:
+        - stdout(statistics)
+        description: Compute alignment statistics between TS/SCO frames and top bond-event frames from SCO_WBO_summary.jsonl.
+      edges:
+      - from: charge_mult_derivation
+        to: xtb_frequency
+        gate:
+          type: custom
+          file: ''
+          threshold: null
+          description: Multiplicity computed for a given charge state; workflow iterates charges -1/0/1 per XYZ.
+      - from: xtb_frequency
+        to: tsopt
+        gate:
+          type: imaginary_freq
+          file: xtb_freq.out
+          threshold: 20
+          description: "Proceed only if an imaginary frequency with |\u03BD| > 20 cm\u207B\xB9 is detected in xtb_freq.out."
+      - from: tsopt
+        to: irc
+        gate:
+          type: file_exists
+          file: ts_final_geometry.xyz
+          threshold: null
+          description: TS optimization must produce ts_final_geometry.xyz.
+      - from: irc
+        to: spin_wbo_scan
+        gate:
+          type: file_exists
+          file: finished_irc.trj
+          threshold: null
+          description: IRC must produce finished_irc.trj; spin/WBO scan runs on this trajectory.
+      - from: spin_wbo_scan
+        to: irc_analysis_yarp
+        gate:
+          type: directory_exists
+          file: xTB-scan
+          threshold: null
+          description: Spin/WBO scan must create xTB-scan/ (often appended back into the job zip).
+      - from: irc_analysis_yarp
+        to: sankey
+        gate:
+          type: directory_exists
+          file: IRC_Analysis
+          threshold: null
+          description: YARP analysis must create IRC_Analysis/ with per-frame BEM/adjacency outputs.
+      - from: sankey
+        to: summarize_sco_wbo
+        gate:
+          type: custom
+          file: ''
+          threshold: null
+          description: Summarization scans zips that contain xTB-scan/reactive_summary.csv (independent of Sankey), typically
+            after spin_wbo_scan has been added to zips.
+      - from: summarize_sco_wbo
+        to: compute_sco_wbo_stats
+        gate:
+          type: file_exists
+          file: SCO_WBO_summary.jsonl
+          threshold: null
+          description: Stats script requires SCO_WBO_summary.jsonl.
+      execution_order:
+      - charge_mult_derivation
+      - xtb_frequency
+      - tsopt
+      - irc
+      - spin_wbo_scan
+      - irc_analysis_yarp
+      - sankey
+      - summarize_sco_wbo
+      - compute_sco_wbo_stats
+      template_placeholders:
+        CHARGE_PLACEHOLDER: Net molecular charge to use in Pysisyphus xTB calculations (and in job naming).
+        MULT_PLACEHOLDER: Spin multiplicity for the given charge (computed by scripts/calculate_mult.py).
+        JOBNAME_PLACEHOLDER: SLURM job name string substituted into submission scripts.
+        XXX: Basename token used to name pysisyphus stdout files (e.g., XXX-tsopt.out, XXX-irc.out).
+        FILEPATH: Parent directory path containing zip archives to process (IRC analysis batch mode).
+        PLACEHOLDER: SLURM account/allocation name in irc_analysis.submit.template.
+        PKG_DIR: Root path to the installed plugin/package containing scripts/ (used to locate yarp_results_builder.py and
+          irc_sankey_zoomsvg_fixed.py).
+    _status: complete

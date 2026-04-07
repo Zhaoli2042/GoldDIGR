@@ -1,0 +1,51 @@
+name: multiwfn_batch_mode_bond_orders
+description: Run Multiwfn_noGUI scripted menus to compute Mayer/Wiberg/Fuzzy bond order matrices from ORCA molden file.
+category: science
+interface:
+  inputs:
+  - MOL
+  outputs:
+  - ${MOL}_mayer_mat.txt
+  - ${MOL}_wiberg_mat.txt
+  - ${MOL}_fuzzy_mat.txt and corresponding *_log.out
+invariants:
+- Each run produces bndmat.txt which must be moved immediately to avoid overwrite.
+- Requires Molden file produced by orca_2mkl; Multiwfn reads {{MOL}}.molden.input.
+- Requires ${MOL}.gbw to exist; generates molden via orca_2mkl.
+- Run orca_2mkl to produce {{MOL}}.molden.input before Multiwfn.
+- Menu sequences (9/1, 9/3, 9/7) are tool-version dependent; keep exact inputs.
+- 'Multiwfn menu scripts must match version behavior: 9->(1/3/7)->y->0->q.'
+- Multiwfn writes bndmat.txt; must be renamed after each run.
+- Multiwfn writes bndmat.txt; rename immediately per method to avoid overwrite.
+- 'Menu scripts must remain exactly: 9/1, 9/3, 9/7 sequences with ''y'', ''0'', ''q''.'
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 35
+    scheduler: any
+    tool: multiwfn
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Assumes Multiwfn_noGUI is on PATH and orca_2mkl at /opt/orca/orca_2mkl.
+  multiwfn_nogui_batch_rename_bndmat_outputs:
+    file: multiwfn_nogui_batch_rename_bndmat_outputs.sh
+    lines: 47
+    scheduler: any
+    tool: multiwfn
+    infrastructure:
+      filesystem: isolated
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Suppresses stdout to /dev/null in original.
+  noninteractive_multiwfn_nogui_mayer_wiberg_fuzzy_from_orca_molden:
+    file: noninteractive_multiwfn_nogui_mayer_wiberg_fuzzy_from_orca_molden.sh
+    lines: 53
+    scheduler: any
+    tool: multiwfn
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - golddigr
+    notes: From run_orca_wbo.sh.

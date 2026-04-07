@@ -1,0 +1,41 @@
+name: incremental_ingest_set_difference
+description: Idempotently ingest new tarballs into inputs/ and append only previously-untracked zip entries into file_list.txt
+  using comm-based set difference.
+category: scheduler
+interface:
+  inputs:
+  - '{{JOBS_PER_CHUNK}}'
+  - '{{INPUT_TARBALLS_OR_ARGS}}'
+  outputs:
+  - Updated file_list.txt
+  - new job_N.txt chunks
+  - restarted submit tmux session
+invariants:
+- Preserve nested directory structure under inputs/ when extracting tarballs.
+- Mirrors directory structure from inputs/ into results/ after ingest.
+- Never re-add zips already tracked; safe to run multiple times.
+- file_list.txt column 1 must be absolute zip paths; comm requires both lists sorted.
+- 'file_list.txt format must remain: ''zip_abspath, zip_relpath_no_ext'' (comma+space delimiter).'
+- 'Never re-add a .zip already tracked: compute set-difference between on-disk zips and file_list.txt using sorted absolute
+  paths + comm.'
+variants:
+  DFT-singlepoint-OSG-Condor_default:
+    file: DFT-singlepoint-OSG-Condor_default.sh
+    lines: 145
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: This is the full tested add_data.sh (includes chunk continuation + selective monitor restart).
+  tarball_ingest_append_new_zips_with_cleanup_and_newcount:
+    file: tarball_ingest_append_new_zips_with_cleanup_and_newcount.sh
+    lines: 84
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: "From add_data.sh steps 1\u20133; safe to run multiple times."

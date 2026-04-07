@@ -108,12 +108,36 @@ def main():
     sub = parser.add_subparsers(dest="action")
 
     # ── develop ───────────────────────────────────────────────────────
-    dev = sub.add_parser("develop", help="Incremental test-driven plugin development")
+    dev = sub.add_parser("develop", help="Unified plugin development (generate + test + fix)")
     dev.add_argument("name", help="Plugin name or path")
     dev.add_argument("--provider", default=None, help="LLM provider")
     dev.add_argument("--model", default=None, help="LLM model")
     dev.add_argument("--force", action="store_true",
                      help="Regenerate glue/ even if it already exists")
+    # Merged pilot options
+    dev.add_argument("--real-data", action="store_true",
+                     help="Use real XYZ files from scraped data instead of synthetic")
+    dev.add_argument("--xyz-root", type=Path, default=None,
+                     help="Path to XYZ root directory (for --real-data)")
+    dev.add_argument("--n-jobs", type=int, default=3,
+                     help="Number of test jobs for --real-data mode")
+    dev.add_argument("--prep-only", action="store_true",
+                     help="Prepare workspace and stop (launch manually)")
+    dev.add_argument("--resume", type=Path, default=None,
+                     help="Resume from existing workspace directory")
+    dev.add_argument("--poll-interval", type=int, default=60,
+                     help="Scheduler poll interval in seconds")
+    dev.add_argument("--max-wait", type=int, default=7200,
+                     help="Maximum wait time for jobs in seconds")
+    # Merged porter option
+    dev.add_argument("--port-to", default=None,
+                     choices=["slurm", "htcondor", "sge", "pbs", "local"],
+                     help="Port glue to target scheduler, then test")
+    # Merged diagnose option
+    dev.add_argument("--diagnose-only", action="store_true",
+                     help="Run diagnosis on existing results only")
+    dev.add_argument("--no-auto-fix", action="store_true",
+                     help="Disable auto-fix during diagnosis")
 
     # ── catalog ───────────────────────────────────────────────────────
     cat = sub.add_parser("catalog", help="Catalog a plugin into the knowledge base")
@@ -125,8 +149,8 @@ def main():
     cat.add_argument("-y", "--yes", action="store_true",
                      help="Accept all prompts (non-interactive)")
 
-    # ── diagnose ──────────────────────────────────────────────────────
-    diag = sub.add_parser("diagnose", help="LLM-powered failure diagnosis")
+    # ── diagnose (deprecated → develop --diagnose-only) ────────────────
+    diag = sub.add_parser("diagnose", help="(Deprecated: use develop --diagnose-only) Failure diagnosis")
     diag.add_argument("name", help="Plugin name")
     diag.add_argument("--pilot-dir", type=Path, default=None,
                       help="Path to pilot results directory")
@@ -151,8 +175,8 @@ def main():
     init.add_argument("--model", default=None, help="LLM model")
     init.add_argument("-y", "--yes", action="store_true")
 
-    # ── pilot-loop (legacy) ───────────────────────────────────────────
-    loop = sub.add_parser("pilot-loop", help="(Legacy) Generate pilot loop script")
+    # ── pilot-loop (deprecated → develop --real-data) ──────────────────
+    loop = sub.add_parser("pilot-loop", help="(Deprecated: use develop --real-data)")
     loop.add_argument("name", help="Plugin name")
     loop.add_argument("--n-jobs", type=int, default=1)
     loop.add_argument("--max-iterations", type=int, default=5)
@@ -160,8 +184,8 @@ def main():
     loop.add_argument("--provider", default=None, help="LLM provider")
     loop.add_argument("--model", default=None, help="LLM model")
 
-    # ── pilot (legacy) ────────────────────────────────────────────────
-    pilot = sub.add_parser("pilot", help="(Legacy) Run pilot test")
+    # ── pilot (deprecated → develop --real-data) ───────────────────────
+    pilot = sub.add_parser("pilot", help="(Deprecated: use develop --real-data)")
     pilot.add_argument("name", help="Plugin name")
     pilot.add_argument("--n-jobs", type=int, default=3)
     pilot.add_argument("--poll-interval", type=int, default=60)
@@ -189,8 +213,8 @@ def main():
     launch.add_argument("name", help="Plugin name")
     launch.add_argument("--force", action="store_true")
 
-    # ── port ──────────────────────────────────────────────────────────
-    port = sub.add_parser("port", help="Port workflow to a different scheduler")
+    # ── port (deprecated → develop --port-to) ──────────────────────────
+    port = sub.add_parser("port", help="(Deprecated: use develop --port-to)")
     port.add_argument("name", help="Plugin name")
     port.add_argument("--target", required=True,
                       choices=["slurm", "htcondor", "sge", "pbs", "local"])
@@ -262,6 +286,16 @@ def _do_develop(args):
         provider=provider,
         model=model,
         force=getattr(args, 'force', False),
+        real_data=getattr(args, 'real_data', False),
+        xyz_root=getattr(args, 'xyz_root', None),
+        n_jobs=getattr(args, 'n_jobs', 3),
+        prep_only=getattr(args, 'prep_only', False),
+        resume_dir=getattr(args, 'resume', None),
+        max_wait=getattr(args, 'max_wait', 7200),
+        poll_interval=getattr(args, 'poll_interval', 60),
+        port_to=getattr(args, 'port_to', None),
+        diagnose_only=getattr(args, 'diagnose_only', False),
+        auto_fix=not getattr(args, 'no_auto_fix', False),
     )
 
     if result.get("status") in ("glue_exists", "empty_plugin"):
@@ -416,20 +450,21 @@ def _do_init(args):
 
 
 def _do_pilot_loop(args):
-    from pipeline.plugins.pilot import generate_pilot_loop
+    print("⚠  'pilot-loop' is deprecated. Use 'develop --real-data' instead.\n")
+    from pipeline.plugins.develop import develop_plugin
 
     plugin_dir = _find_plugin_dir(args.name)
     provider, model = _resolve_llm_config(args)
-    xyz_root = PROJECT_ROOT / "data" / "output" / "xyz"
 
-    result = generate_pilot_loop(
+    result = develop_plugin(
         plugin_dir=plugin_dir,
-        xyz_root=xyz_root,
-        n_jobs=args.n_jobs,
-        max_iterations=args.max_iterations,
-        poll_interval=args.poll_interval,
+        plugins_root=Path("plugins"),
         provider=provider or "openai",
         model=model or "gpt-4o",
+        real_data=True,
+        xyz_root=PROJECT_ROOT / "data" / "output" / "xyz",
+        n_jobs=args.n_jobs,
+        poll_interval=args.poll_interval,
     )
 
     if result.get("error"):
@@ -437,23 +472,24 @@ def _do_pilot_loop(args):
 
 
 def _do_pilot(args):
-    from pipeline.plugins.pilot import run_pilot
+    print("⚠  'pilot' is deprecated. Use 'develop --real-data' instead.\n")
+    from pipeline.plugins.develop import develop_plugin
 
     plugin_dir = _find_plugin_dir(args.name)
     provider, model = _resolve_llm_config(args)
-    xyz_root = PROJECT_ROOT / "data" / "output" / "xyz"
 
-    result = run_pilot(
+    result = develop_plugin(
         plugin_dir=plugin_dir,
-        xyz_root=xyz_root,
+        plugins_root=Path("plugins"),
+        provider=provider or "openai",
+        model=model or "gpt-4o",
+        real_data=True,
+        xyz_root=PROJECT_ROOT / "data" / "output" / "xyz",
         n_jobs=args.n_jobs,
         poll_interval=args.poll_interval,
         max_wait=args.max_wait,
-        auto_diagnose=args.auto_fix,
         prep_only=getattr(args, 'prep_only', False),
         resume_dir=getattr(args, 'pilot_dir', None),
-        provider=provider or "openai",
-        model=model or "gpt-4o",
     )
 
     if result.get("error"):
@@ -523,18 +559,22 @@ def _do_launch(args):
 
 
 def _do_port(args):
-    from pipeline.plugins.porter import port_plugin
+    print("⚠  'port' is deprecated. Use 'develop --port-to <scheduler>' instead.\n")
+    from pipeline.plugins.develop import develop_plugin
 
     plugin_dir = _find_plugin_dir(args.name)
     provider, model = _resolve_llm_config(args)
 
-    port_plugin(
+    result = develop_plugin(
         plugin_dir=plugin_dir,
-        target_scheduler=args.target,
-        target_template=args.template,
+        plugins_root=Path("plugins"),
         provider=provider or "openai",
         model=model or "gpt-4o",
+        port_to=args.target,
     )
+
+    if result.get("error"):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

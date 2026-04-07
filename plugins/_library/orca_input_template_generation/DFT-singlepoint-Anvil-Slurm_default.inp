@@ -1,0 +1,27 @@
+# ── SNIPPET: orca_input_template_generation/DFT-singlepoint-Anvil-Slurm_default ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      golddigr_orca_multiwfn_anvil
+# Invariants:
+#   - Keep method line and blocks exactly as used: wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer.
+#   - Keep %pal nproc 4 end and %maxcore 1500 as the resource contract with the scheduler wrapper.
+#   - Use '*xyzfile CHARGE MULT XYZ_FILE' (not inline coordinates).
+# Notes: Assumes XYZ_FILE exists in CWD.
+# ────────────────────────────────────────────────────────────
+
+#!/bin/bash
+# file: orca_input_template_generation.sh
+
+MOL="{{MOL}}"
+CHARGE="{{CHARGE}}"
+MULT="{{MULT}}"
+XYZ_FILE="{{XYZ_FILE}}"
+
+cat > "${MOL}.inp" <<EOF
+! wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer
+%scf MaxIter 500 end
+%pal nproc 4 end
+%maxcore 1500
+%base "${MOL}"
+*xyzfile ${CHARGE} ${MULT} ${XYZ_FILE}
+EOF

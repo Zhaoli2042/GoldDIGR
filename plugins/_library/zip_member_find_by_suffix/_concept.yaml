@@ -1,0 +1,23 @@
+name: zip_member_find_by_suffix
+description: Find a zip member by suffix, and find a member specifically under xTB-scan/ by basename.
+category: adapters
+interface:
+  inputs:
+  - namelist
+  - suffix | filename
+  outputs:
+  - member_name_or_None
+invariants:
+- Suffix matching is used (not exact path), enabling variable leading directories inside zips.
+- xTB-scan lookup requires member name ending with 'xTB-scan/<filename>'.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 26
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Keeps zip reading selective and robust to archive layout.

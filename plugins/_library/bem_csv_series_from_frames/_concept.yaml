@@ -1,0 +1,25 @@
+name: bem_csv_series_from_frames
+description: Load all frame_*_bond_electrons.csv in a directory into a consistent label set and time-ordered matrices.
+category: adapters
+interface:
+  inputs:
+  - workdir
+  outputs:
+  - labels0
+  - mats(list[matrix])
+  - frames(list[int])
+invariants:
+- "Frame index is parsed from filename token frame_00088_bond_electrons.csv \u2192 88."
+- If labels differ across frames, conservatively reorder by label name into the first-frame label order; missing labels become
+  0.0.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 47
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Downstream assumes mats[0] is first frame and mats[-1] is last.

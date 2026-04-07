@@ -1,0 +1,93 @@
+name: results_backup_verified_aggregation
+description: Periodic backup monitor that aggregates old result tarballs into verified archives with manifests and safe deletion.
+category: monitoring
+interface:
+  inputs:
+  - '{{RESULTS_DIR}}'
+  - '{{DEST_BASE}}'
+  - '{{CHECK_INTERVAL}}'
+  - '{{MIN_FILE_AGE}}'
+  - '{{MIN_QUIET_TIME}}'
+  - '{{MIN_FILES_TO_PACK}}'
+  outputs:
+  - backup_*.tar.gz in destination
+  - manifest files
+  - backup_results.log; deletes original *_results.tar.gz after verification
+invariants:
+- Use df on DEST_BASE and compare integer percent to threshold.
+- Never delete originals unless tar -tzf verification succeeds.
+- Finds .sdf anywhere under input_dir via os.walk.
+- Appends (not overwrites) to all_smiles_prefix_map.txt.
+- Copies with shutil.copy2 to preserve metadata.
+- Write a manifest per backup with IN_PROGRESS status to support resume.
+- Do not delete originals until archive is created AND tar -tzf verification succeeds AND atomic rename completes.
+- Write manifest first with IN_PROGRESS; only mark COMPLETE after archive verified and originals deleted.
+- Use both MIN_FILE_AGE and MIN_QUIET_TIME to avoid racing with in-progress writes.
+- Create archive as .tmp then mv to final name (atomic).
+- Only back up files older than MIN_FILE_AGE and not modified within MIN_QUIET_TIME.
+- Preserve directory structure relative to results/ inside the backup tarball.
+- Operate recursively under results/ to support nested structure.
+- Assumes accompanying .smi is named {PREFIX}.smi where PREFIX is SDF stem.
+- 'If IN_PROGRESS and .tmp exists and tar -tzf succeeds: mv to final and delete originals listed in manifest.'
+- 'If FAILED_*: remove manifest to allow clean retry.'
+variants:
+  DFT-singlepoint-OSG-Condor_default:
+    file: DFT-singlepoint-OSG-Condor_default.sh
+    lines: 286
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Destination path logic is environment/site specific; keep placeholders.
+  tar_gz_backup_with_manifest_verification_and_atomic_rename_then_delete:
+    file: tar_gz_backup_with_manifest_verification_and_atomic_rename_then_delete.sh
+    lines: 71
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: Extracted from backup_results.sh create_backup().
+  eligible_tarball_selection_by_min_age_and_quiet_time:
+    file: eligible_tarball_selection_by_min_age_and_quiet_time.sh
+    lines: 25
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From backup_results.sh find_eligible_files().
+  resume_retry_backups_using_in_progress_manifests_and_tmp_validation:
+    file: resume_retry_backups_using_in_progress_manifests_and_tmp_validation.sh
+    lines: 40
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From backup_results.sh resume_incomplete().
+  backup_destination_filesystem_usage_threshold_guard:
+    file: backup_destination_filesystem_usage_threshold_guard.sh
+    lines: 25
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From backup_results.sh check_disk_usage().
+  recursive_collect_and_flatten_sdf_plus_provenance_concat:
+    file: recursive_collect_and_flatten_sdf_plus_provenance_concat.sh
+    lines: 66
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - collect_auto3d_structures
+    notes: Marked as untested in README; snippet is extracted as-is.

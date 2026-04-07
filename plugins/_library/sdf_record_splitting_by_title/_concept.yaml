@@ -1,0 +1,24 @@
+name: sdf_record_splitting_by_title
+description: Split a multi-record SDF into per-molecule records keyed by the first line (title).
+category: adapters
+interface:
+  inputs:
+  - sdf_path
+  outputs:
+  - List[(title
+  - record_lines)]
+invariants:
+- Record delimiter is a line whose stripped content equals '$$$$'.
+- Title is the first line of the record; used as key (expected to match PREFIX labels).
+- Each returned record includes the '$$$$\\n' terminator line.
+variants:
+  Auto3D-GPU-Slurm_default:
+    file: Auto3D-GPU-Slurm_default.sh
+    lines: 37
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - purdue_standby_auto3d_auto_batch
+    notes: Enables fan-out of Auto3D multi-molecule SDF into per-prefix SDF files.

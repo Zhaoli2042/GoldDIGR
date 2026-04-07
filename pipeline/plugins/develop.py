@@ -38,130 +38,22 @@ logger = logging.getLogger(__name__)
 _MAX_PROMPT_CHARS = 60_000
 _MAX_FIX_ATTEMPTS = 3
 
-from ._utils import call_llm
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# Helpers
-# ═══════════════════════════════════════════════════════════════════════
-
-def _run_cmd(cmd: str, cwd: str = None, timeout: int = 120) -> Tuple[int, str]:
-    """Run a shell command, return (exit_code, combined_output)."""
-    try:
-        result = subprocess.run(
-            cmd, shell=True, cwd=cwd,
-            capture_output=True, text=True, timeout=timeout,
-        )
-        output = (result.stdout + "\n" + result.stderr).strip()
-        return result.returncode, output
-    except subprocess.TimeoutExpired:
-        return -1, f"TIMEOUT after {timeout}s"
-    except Exception as e:
-        return -2, str(e)
-
-
-def _strip_fences(text: str) -> str:
-    """Remove markdown code fences (```bash, ```python, etc.) from content."""
-    text = text.strip()
-    # Remove opening fence: ```bash, ```python, ```sh, ``` etc.
-    text = re.sub(r'^```\w*\s*\n?', '', text)
-    # Remove closing fence
-    text = re.sub(r'\n?```\s*$', '', text)
-    return text.strip()
-
-
-def _extract_code_block(raw: str, language: str = "") -> str:
-    """Extract first code block from LLM output."""
-    # Try fenced block
-    pattern = rf"```{language}\s*\n(.*?)```"
-    match = re.search(pattern, raw, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # Try generic fenced
-    match = re.search(r"```\s*\n(.*?)```", raw, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # Try === FILE: ... === format
-    match = re.search(r"=== FILE: .+? ===\s*\n(.*?)(?:=== (?:FILE|END)|$)",
-                      raw, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    # Return as-is (might be raw code)
-    return raw.strip()
-
-
-def _extract_multi_files(raw: str) -> Dict[str, str]:
-    """Parse === FILE: path === blocks from LLM output."""
-    # Pre-strip any top-level fences
-    raw = _strip_fences(raw)
-    files = {}
-    parts = re.split(r"^=== FILE:\s*(.+?)\s*===\s*$", raw, flags=re.MULTILINE)
-    i = 1
-    while i < len(parts) - 1:
-        name = parts[i].strip()
-        content = parts[i + 1].strip()
-        # Trim at next === marker
-        for marker in ("=== FILE:", "=== END"):
-            idx = content.find(marker)
-            if idx >= 0:
-                content = content[:idx].strip()
-        files[name] = _strip_fences(content) + "\n"
-        i += 2
-    return files
+from ._utils import (
+    call_llm,
+    run_cmd as _run_cmd,
+    strip_fences as _strip_fences,
+    extract_code_block as _extract_code_block,
+    extract_multi_files as _extract_multi_files,
+    extract_job_ids_from_output as _extract_job_ids_from_output,
+    is_job_running as _is_job_running,
+    wait_for_jobs as _wait_for_jobs,
+)
 
 
 def _scan_plugin(plugin_dir: Path) -> Dict[str, Any]:
-    """Light scan of plugin directory."""
-    from .ignore import load_ignore_patterns, should_ignore
-
-    info: Dict[str, Any] = {
-        "readme": None, "scripts": [], "samples": [],
-        "glue_exists": (plugin_dir / "glue").is_dir(),
-        "glue_files": [],
-    }
-
-    patterns = load_ignore_patterns(plugin_dir)
-
-    # README
-    for name in ("README.md", "WORKFLOW.md", "README.txt"):
-        rp = plugin_dir / name
-        if rp.exists():
-            info["readme"] = rp.read_text(errors="ignore")[:8000]
-            break
-
-    # Scripts
-    script_exts = (".sh", ".py", ".bash", ".submit", ".r", ".R")
-    for f in sorted(plugin_dir.rglob("*")):
-        if f.is_file() and f.suffix in script_exts:
-            if should_ignore(f, plugin_dir, patterns):
-                continue
-            rel = str(f.relative_to(plugin_dir))
-            if rel.startswith("glue/"):
-                info["glue_files"].append(rel)
-                continue
-            content = f.read_text(errors="ignore")[:15000]
-            info["scripts"].append({"path": rel, "name": f.name, "content": content})
-
-    # Existing glue
-    glue_dir = plugin_dir / "glue"
-    if glue_dir.is_dir():
-        for f in sorted(glue_dir.iterdir()):
-            if f.is_file():
-                info["glue_files"].append(f"glue/{f.name}")
-
-    # Samples
-    try:
-        from .samples import detect_samples, inspect_sample
-        raw_samples = detect_samples(plugin_dir)
-        for s in raw_samples[:5]:
-            inspected = inspect_sample(Path(s["path"]))
-            if inspected:
-                s.update(inspected)
-            info["samples"].append(s)
-    except Exception:
-        pass
-
-    return info
+    """Light scan of plugin directory. Delegates to initializer.scan_plugin_dir."""
+    from .initializer import scan_plugin_dir
+    return scan_plugin_dir(plugin_dir)
 
 
 def _gather_context(
@@ -233,6 +125,16 @@ def _gather_context(
                          + yaml.dump(cat_plugins, default_flow_style=False,
                                      sort_keys=False, width=120)[:5000]
                          + "\n=== END CATALOG ===\n")
+
+            # Workflow graph for this specific plugin
+            from .catalog import format_workflow_graph_for_prompt
+            plugin_name = plugin_dir.name
+            for pname, pentry in cat_plugins.items():
+                if pname == plugin_name or pname.startswith(plugin_name[:20]):
+                    wg = pentry.get("workflow_graph")
+                    if wg:
+                        parts.append(format_workflow_graph_for_prompt(wg))
+                        break
     except Exception:
         pass
 
@@ -735,6 +637,65 @@ def _generate_one_file(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# Stub detection
+# ═══════════════════════════════════════════════════════════════════════
+
+# Markers that indicate auto-fix created a fake/skip success path
+_STUB_MARKERS = (
+    "glue_only_runner_fallback",
+    "skipping stats stage",
+    "skip-but-succeed",
+    "stub",
+    "SKIPPED:",
+    "placeholder",
+    "fallback runner",
+    "no real computation",
+)
+
+
+def _detect_stub_success(workspace: Path, launch_output: str = "") -> Optional[str]:
+    """Scan workspace output files and launch output for stub/fake success markers.
+
+    Returns a description of the stub if found, None if outputs look real.
+    """
+    # First check launch stdout/stderr for stub markers
+    if launch_output:
+        launch_lower = launch_output.lower()
+        for marker in _STUB_MARKERS:
+            if marker.lower() in launch_lower:
+                return f"launch output contains '{marker}'"
+
+    # Check common output locations
+    scan_paths = []
+    for pattern in ("results/*", "*.jsonl", "*.json", "*.ok", "*.OK"):
+        scan_paths.extend(workspace.glob(pattern))
+    # Also check results subdirs
+    results_dir = workspace / "results"
+    if results_dir.is_dir():
+        scan_paths.extend(results_dir.rglob("*"))
+    # Check runs/ and workspace_glue/ for per-job stubs
+    for subdir_name in ("runs", "workspace_glue"):
+        subdir = workspace / subdir_name
+        if subdir.is_dir():
+            for ext in ("*.jsonl", "*.json", "*.log", "*.out", "*.txt"):
+                scan_paths.extend(subdir.rglob(ext))
+
+    for fpath in scan_paths:
+        if not fpath.is_file() or fpath.stat().st_size > 50_000:
+            continue
+        try:
+            content = fpath.read_text(errors="ignore")
+            content_lower = content.lower()
+            for marker in _STUB_MARKERS:
+                if marker.lower() in content_lower:
+                    return f"{fpath.name} contains '{marker}'"
+        except Exception:
+            continue
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Workspace + job tracking helpers
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -756,6 +717,7 @@ def _build_workspace(
     plugin_dir: Path,
     workspace: Path,
     test_input: Optional[Path],
+    real_xyz_files: Optional[List[Path]] = None,
 ) -> None:
     """Build a fresh disposable workspace for one pilot iteration."""
     print(f"\n   🔨 Building fresh workspace...")
@@ -777,7 +739,12 @@ def _build_workspace(
     xyz_dir = workspace / "xyz"
     xyz_dir.mkdir()
 
-    if test_input and test_input.exists():
+    # Real data mode: copy all XYZ files directly
+    if real_xyz_files:
+        for f in real_xyz_files:
+            shutil.copy2(f, xyz_dir / f.name)
+        print(f"   📄 Using {len(real_xyz_files)} real XYZ file(s)")
+    elif test_input and test_input.exists():
         if test_input.suffix == ".xyz":
             shutil.copy2(test_input, xyz_dir / test_input.name)
             print(f"   📄 Using test input: {test_input.name}")
@@ -842,97 +809,6 @@ def _build_workspace(
     (workspace / "work").mkdir(exist_ok=True)
 
     print(f"   ✅ Workspace ready: {workspace}")
-
-
-def _extract_job_ids_from_output(output: str) -> List[str]:
-    """Extract scheduler job IDs from launch output. Works for SGE, SLURM, HTCondor, PBS."""
-    ids = []
-
-    # SGE: "Your job 12345 ..." or "Your job-array 12345.1-100:1 ..."
-    for m in re.finditer(r'Your job(?:-array)?\s+(\d+)', output):
-        ids.append(m.group(1))
-
-    # SLURM: "Submitted batch job 12345"
-    for m in re.finditer(r'Submitted batch job\s+(\d+)', output):
-        ids.append(m.group(1))
-
-    # HTCondor: "1 job(s) submitted to cluster 12345"
-    for m in re.finditer(r'submitted to cluster\s+(\d+)', output):
-        ids.append(m.group(1))
-
-    # PBS: "12345.pbs-server"
-    for m in re.finditer(r'^(\d+)\.', output, re.MULTILINE):
-        ids.append(m.group(1))
-
-    # Generic: "job_id=12345" or "jobid=12345" (custom scripts)
-    for m in re.finditer(r'job[_-]?id[=:]\s*(\d+)', output, re.IGNORECASE):
-        if m.group(1) not in ids:
-            ids.append(m.group(1))
-
-    return list(dict.fromkeys(ids))  # deduplicate preserving order
-
-
-def _is_job_running(job_id: str) -> bool:
-    """Check if a scheduler job is still active."""
-    # SGE
-    if shutil.which("qstat"):
-        rc = subprocess.call(["qstat", "-j", job_id],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if rc == 0:
-            return True
-
-    # SLURM
-    if shutil.which("squeue"):
-        try:
-            out = subprocess.check_output(
-                ["squeue", "-j", job_id, "--noheader"], text=True, stderr=subprocess.DEVNULL
-            )
-            if out.strip():
-                return True
-        except subprocess.CalledProcessError:
-            pass
-
-    # HTCondor
-    if shutil.which("condor_q"):
-        try:
-            out = subprocess.check_output(
-                ["condor_q", job_id], text=True, stderr=subprocess.DEVNULL
-            )
-            if re.search(rf'^{job_id}', out, re.MULTILINE):
-                return True
-        except subprocess.CalledProcessError:
-            pass
-
-    return False
-
-
-def _wait_for_jobs(
-    job_ids: List[str],
-    poll_interval: int = 60,
-    timeout: int = 7200,
-) -> None:
-    """Wait for all scheduler jobs to finish."""
-    start = time.time()
-    polls = 0
-
-    while True:
-        polls += 1
-        running = [jid for jid in job_ids if _is_job_running(jid)]
-
-        if not running:
-            if polls > 1:  # Give at least 2 polls
-                print(f"   ✅ All {len(job_ids)} job(s) finished.")
-                return
-        else:
-            elapsed = int(time.time() - start)
-            print(f"   Jobs running: {len(running)}/{len(job_ids)} "
-                  f"(elapsed: {elapsed}s)")
-
-        if time.time() - start > timeout:
-            print(f"   ⚠  Timeout ({timeout}s). {len(running)} job(s) still running.")
-            return
-
-        time.sleep(poll_interval)
 
 
 def _snapshot_workspace(workspace: Path, iter_log: Path) -> None:
@@ -1011,12 +887,31 @@ def develop_plugin(
     force: bool = False,
     skip_full_run: bool = False,
     poll_interval: int = 60,
+    # ── Merged pilot options ──
+    real_data: bool = False,
+    xyz_root: Optional[Path] = None,
+    n_jobs: int = 3,
+    prep_only: bool = False,
+    resume_dir: Optional[Path] = None,
+    max_wait: int = 7200,
+    # ── Merged porter option ──
+    port_to: Optional[str] = None,
+    # ── Merged diagnose option ──
+    diagnose_only: bool = False,
+    diagnose_mode: str = "pilot",
+    auto_fix: bool = True,
 ) -> Dict[str, Any]:
     """
-    Incremental, test-driven plugin development.
+    Unified plugin development command.
 
-    Generates workflow scripts one at a time, testing each against
-    real cluster output before generating the next.
+    Modes:
+      - Default: generate scaffold (via initializer) + test input + smoke tests
+                 + pilot loop with auto-diagnose
+      - --real-data: use real XYZ files from scraped data instead of synthetic
+      - --prep-only: prepare workspace and stop (user launches manually)
+      - --resume <dir>: skip generation, check results from existing directory
+      - --port-to <scheduler>: port glue to target scheduler, then test
+      - --diagnose-only: run diagnosis on existing results without re-generating
     """
     plugin_dir = Path(plugin_dir).resolve()
     plugins_root = Path(plugins_root)
@@ -1024,13 +919,64 @@ def develop_plugin(
     print(f"\n🔨 Plugin Develop: {plugin_dir.name}")
     print(f"   Provider: {provider}/{model}")
 
-    # ── Check for existing glue ───────────────────────────────────────
-    glue_dir = plugin_dir / "glue"
-    if glue_dir.is_dir() and any(glue_dir.iterdir()) and not force:
-        print(f"\n   ⚠  glue/ already exists ({len(list(glue_dir.iterdir()))} files).")
-        print(f"   Use --force to regenerate, or manually edit existing files.")
-        print(f"   Existing: {', '.join(f.name for f in glue_dir.iterdir())}")
-        return {"status": "glue_exists"}
+    # ── Diagnose-only mode ────────────────────────────────────────────
+    if diagnose_only:
+        pilot_dir = resume_dir
+        if pilot_dir is None:
+            # Find latest dev_logs or pilot results
+            dev_logs = plugin_dir / "dev_logs"
+            if dev_logs.is_dir():
+                subdirs = sorted([d for d in dev_logs.iterdir() if d.is_dir()],
+                                 key=lambda d: d.name, reverse=True)
+                if subdirs:
+                    # Find latest iteration within latest session
+                    iters = sorted([d for d in subdirs[0].iterdir()
+                                    if d.is_dir() and d.name.startswith("iteration_")],
+                                   key=lambda d: d.name, reverse=True)
+                    pilot_dir = iters[0] if iters else subdirs[0]
+
+        if pilot_dir is None or not Path(pilot_dir).is_dir():
+            print(f"   ❌ No results directory found. Specify --resume <dir>.")
+            return {"error": "no_results_dir"}
+
+        print(f"   Diagnosing: {pilot_dir}")
+        from .diagnose import diagnose_results
+        return diagnose_results(
+            pilot_dir=Path(pilot_dir),
+            provider=provider,
+            model=model,
+            mode=diagnose_mode,
+            auto_fix=auto_fix,
+        )
+
+    # ── Resume mode: check results from existing workspace ───────────
+    if resume_dir is not None:
+        resume_path = Path(resume_dir).resolve()
+        if not resume_path.is_dir():
+            print(f"   ❌ Resume directory not found: {resume_path}")
+            return {"error": "resume_dir_not_found"}
+
+        print(f"\n🔄 Resuming from: {resume_path}")
+        from ._utils import collect_results
+        results = collect_results(resume_path)
+        s = results["summary"]
+        print(f"   Total: {s['total']}  Passed: {s['passed']}  "
+              f"Failed: {s['failed']}  Unknown: {s['unknown']}")
+
+        if s["failed"] > 0 or s["unknown"] > 0:
+            print(f"\n🔍 Auto-diagnosing failures...")
+            from .diagnose import diagnose_results
+            diag = diagnose_results(
+                pilot_dir=resume_path,
+                results=results,
+                provider=provider,
+                model=model,
+                mode="pilot",
+                auto_fix=auto_fix,
+            )
+            results["diagnosis"] = diag
+
+        return results
 
     # ── Scan ──────────────────────────────────────────────────────────
     print(f"\n🔍 Scanning plugin...")
@@ -1044,6 +990,48 @@ def develop_plugin(
     if not scan["readme"] and not scan["scripts"]:
         print("   ❌ Need at least a README.md or one script to start development.")
         return {"status": "empty_plugin"}
+
+    # ── Check for existing glue ───────────────────────────────────────
+    glue_dir = plugin_dir / "glue"
+    if glue_dir.is_dir() and any(glue_dir.iterdir()) and not force:
+        print(f"\n   ⚠  glue/ already exists ({len(list(glue_dir.iterdir()))} files).")
+        print(f"   Use --force to regenerate, or manually edit existing files.")
+        print(f"   Existing: {', '.join(f.name for f in glue_dir.iterdir())}")
+        print(f"   Skipping generation — proceeding to test loop.")
+    else:
+        # ── Use initializer for scaffold generation ───────────────────
+        print(f"\n🔧 Generating plugin scaffold via initializer...")
+        from .initializer import init_plugin
+        init_ok = init_plugin(
+            plugin_dir=plugin_dir,
+            plugins_root=plugins_root,
+            provider=provider,
+            model=model,
+            non_interactive=True,
+        )
+        if not init_ok:
+            print("   ❌ Initializer failed to generate scaffold.")
+            return {"status": "init_failed"}
+
+        # Re-scan after init to pick up new glue files
+        scan = _scan_plugin(plugin_dir)
+
+    # ── Port-to mode: translate glue before testing ──────────────────
+    if port_to:
+        print(f"\n🔄 Porting glue scripts to {port_to}...")
+        from .porter import port_plugin
+        port_ok = port_plugin(
+            plugin_dir=plugin_dir,
+            target_scheduler=port_to,
+            provider=provider,
+            model=model,
+            non_interactive=True,
+        )
+        if not port_ok:
+            print(f"   ❌ Porting to {port_to} failed.")
+            return {"status": "port_failed"}
+        # Re-scan after porting
+        scan = _scan_plugin(plugin_dir)
 
     # ── Set up dev workspace ──────────────────────────────────────────
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1073,15 +1061,49 @@ def develop_plugin(
     evidence = []
 
     # ══════════════════════════════════════════════════════════════════
-    # Phase 0: Minimal test input
+    # Phase 0: Test input (synthetic or real data)
     # ══════════════════════════════════════════════════════════════════
-    test_input = phase0_generate_test_input(
-        plugin_dir, scan, provider, model, dev_dir
-    )
-    if test_input:
-        evidence.append(f"=== MINIMAL TEST INPUT ===\n"
-                        f"File: {test_input.name} ({test_input.stat().st_size} bytes)\n"
+    test_input = None
+    real_xyz_files = []  # used in --real-data mode
+
+    if real_data:
+        from ._utils import pick_representative_files
+        if xyz_root is None:
+            # Default: look for scraped data
+            xyz_root = plugin_dir.parent.parent / "data" / "output" / "xyz"
+        xyz_root = Path(xyz_root)
+        real_xyz_files = pick_representative_files(xyz_root, n_jobs)
+        if not real_xyz_files:
+            # Fallback to samples in plugin dir
+            try:
+                from .samples import detect_samples
+                samples = detect_samples(plugin_dir)
+                sample_xyz = [s for s in samples if s.get("type") == "xyz_geometry"]
+                if sample_xyz:
+                    real_xyz_files = [Path(s["path"]) for s in sample_xyz[:n_jobs]]
+            except Exception:
+                pass
+        if not real_xyz_files:
+            print("   ❌ No real XYZ files found. Use --real-data with scraped data or samples.")
+            return {"status": "no_real_data"}
+        print(f"\n📂 Using {len(real_xyz_files)} real XYZ file(s):")
+        for f in real_xyz_files:
+            try:
+                natoms = int(f.read_text().splitlines()[0].strip())
+            except Exception:
+                natoms = "?"
+            print(f"   {f.name} ({natoms} atoms)")
+        evidence.append(f"=== REAL DATA: {len(real_xyz_files)} files ===\n"
+                        f"Files: {', '.join(f.name for f in real_xyz_files)}\n"
                         f"=== END ===\n")
+    else:
+        test_input = phase0_generate_test_input(
+            plugin_dir, scan, provider, model, dev_dir
+        )
+        if test_input:
+            evidence.append(f"=== MINIMAL TEST INPUT ===\n"
+                            f"File: {test_input.name} ({test_input.stat().st_size} bytes)\n"
+                            f"=== END ===\n")
 
     # ══════════════════════════════════════════════════════════════════
     # Phase 1: Smoke tests
@@ -1099,82 +1121,21 @@ def develop_plugin(
                     + "\n".join(smoke_summary) + "\n=== END ===\n")
 
     # ══════════════════════════════════════════════════════════════════
-    # Phase 2: Generate prepare_and_launch.sh
+    # Phase 2-3: Glue scripts (already generated by initializer above)
     # ══════════════════════════════════════════════════════════════════
-    print(f"\n🔧 Phase 2: Generating data prep + submission script...")
-
-    scheduler = smoke.get("scheduler", "sge")
-    container_info = smoke.get("container", {})
-
-    phase2_purpose = (
-        f"Data preparation and job submission for {scheduler}.\n"
-        f"- Read xyz/*.xyz files, compute charge (=0) and multiplicity from electron count\n"
-        f"- Package into zips with naming convention the user's script expects\n"
-        f"- Submit via {scheduler} (qsub/sbatch/condor_submit)\n"
-        f"- The script should be self-contained: prep + submit in one script\n"
-        f"- Container image: {container_info.get('image', 'see README')}\n"
-    )
-
-    ctx = base_context + "\n" + "\n".join(evidence)
-    content = _generate_one_file(
-        "glue/prepare_and_launch.sh", phase2_purpose,
-        ctx, provider, model, dev_dir
-    )
-
-    if content:
-        # Test: bash -n
-        rc, out = _run_cmd(f"bash -n {dev_dir / 'glue' / 'prepare_and_launch.sh'}")
-        if rc == 0:
-            print(f"   ✅ prepare_and_launch.sh syntax OK ({content.count(chr(10))} lines)")
-            evidence.append(f"=== PHASE 2: prepare_and_launch.sh GENERATED ===\n"
-                            f"Lines: {content.count(chr(10))}, syntax: valid\n=== END ===\n")
-        else:
-            print(f"   ⚠  Syntax error: {out[:200]}")
-            # Try to fix
-            fix_ctx = ctx + f"\n\n=== SYNTAX ERROR ===\n{out}\n=== END ===\n"
-            content = _generate_one_file(
-                "glue/prepare_and_launch.sh",
-                phase2_purpose + f"\nPREVIOUS ATTEMPT HAD SYNTAX ERROR:\n{out[:500]}",
-                fix_ctx, provider, model, dev_dir
-            )
-            if content:
-                rc2, _ = _run_cmd(f"bash -n {dev_dir / 'glue' / 'prepare_and_launch.sh'}")
-                status = "fixed" if rc2 == 0 else "still_broken"
-                print(f"   {'✅' if rc2 == 0 else '❌'} Retry: {status}")
-    else:
-        print(f"   ❌ Failed to generate prepare_and_launch.sh")
-
-    # ══════════════════════════════════════════════════════════════════
-    # Phase 3: Generate task_wrapper.sh
-    # ══════════════════════════════════════════════════════════════════
-    print(f"\n🔧 Phase 3: Generating task wrapper...")
-
-    phase3_purpose = (
-        f"Per-job task wrapper that runs the user's science script inside the container.\n"
-        f"- Takes a zip path as argument\n"
-        f"- Creates a per-job workdir\n"
-        f"- Runs user's script inside container ({container_info.get('runtime', 'apptainer')})\n"
-        f"- Collects results (results.tar.gz) and moves to results dir\n"
-        f"- MUST always emit status.json even on failure\n"
-        f"- MUST include OMPI_MCA_ras=^gridengine if SGE + container + OpenMPI\n"
-    )
-
-    ctx = base_context + "\n" + "\n".join(evidence)
-    content = _generate_one_file(
-        "glue/task_wrapper.sh", phase3_purpose,
-        ctx, provider, model, dev_dir
-    )
-
-    if content:
-        rc, out = _run_cmd(f"bash -n {dev_dir / 'glue' / 'task_wrapper.sh'}")
-        if rc == 0:
-            print(f"   ✅ task_wrapper.sh syntax OK ({content.count(chr(10))} lines)")
-            evidence.append(f"=== PHASE 3: task_wrapper.sh GENERATED ===\n"
-                            f"Lines: {content.count(chr(10))}, syntax: valid\n=== END ===\n")
-        else:
-            print(f"   ⚠  Syntax error: {out[:200]}")
-    else:
-        print(f"   ❌ Failed to generate task_wrapper.sh")
+    # Validate that glue scripts exist and have valid syntax
+    glue_dir = plugin_dir / "glue"
+    for gf_name in ("prepare_and_launch.sh", "task_wrapper.sh"):
+        gf_path = glue_dir / gf_name
+        if gf_path.exists():
+            rc, out = _run_cmd(f"bash -n {gf_path}")
+            if rc == 0:
+                lines = gf_path.read_text().count("\n")
+                print(f"   ✅ {gf_name} syntax OK ({lines} lines)")
+                evidence.append(f"=== {gf_name} PRESENT ===\n"
+                                f"Lines: {lines}, syntax: valid\n=== END ===\n")
+            else:
+                print(f"   ⚠  {gf_name} syntax error: {out[:200]}")
 
     # ══════════════════════════════════════════════════════════════════
     # Phase 4: Extract IO contract → fill checker template
@@ -1279,6 +1240,18 @@ def develop_plugin(
         print("   ❌ No scripts generated. Cannot proceed to testing.")
         return {"status": "no_scripts"}
 
+    # ── Prep-only mode: stop here ────────────────────────────────────
+    if prep_only:
+        workspace = plugin_dir / "workspace"
+        _build_workspace(plugin_dir, workspace, test_input, real_xyz_files or None)
+        print(f"\n✅ Workspace prepared: {workspace}")
+        print(f"   To run manually:")
+        print(f"   cd {workspace}")
+        print(f"   bash glue/prepare_and_launch.sh")
+        print(f"\n   Then resume with:")
+        print(f"   python plugin.py develop {plugin_dir.name} --resume {workspace}")
+        return {"status": "prepped", "workspace": str(workspace)}
+
     # ══════════════════════════════════════════════════════════════════
     # Phase 5-8: Pilot loop (workspace isolation, submit, wait, check)
     # ══════════════════════════════════════════════════════════════════
@@ -1309,7 +1282,8 @@ def develop_plugin(
         result = _run_pilot_loop(
             plugin_dir, log_dir, test_input, provider, model,
             max_iterations, poll_interval, smoke, generated, timestamp,
-            _active_job_ids,
+            _active_job_ids, real_xyz_files=real_xyz_files or None,
+            max_wait=max_wait,
         )
     except KeyboardInterrupt:
         print("\n\n⚠  Interrupted by user.")
@@ -1332,6 +1306,8 @@ def _run_pilot_loop(
     generated: List[str],
     timestamp: str,
     active_job_ids: List[str],
+    real_xyz_files: Optional[List[Path]] = None,
+    max_wait: int = 7200,
 ) -> Dict[str, Any]:
     """The actual pilot loop, separated for signal handling."""
 
@@ -1345,17 +1321,34 @@ def _run_pilot_loop(
         iter_log = log_dir / f"iteration_{iteration}"
         iter_log.mkdir(parents=True, exist_ok=True)
 
-        _build_workspace(plugin_dir, workspace, test_input)
+        _build_workspace(plugin_dir, workspace, test_input, real_xyz_files)
 
-        # ── Run prepare_and_launch.sh ─────────────────────────────────
-        print(f"\n🚀 Running glue/prepare_and_launch.sh...")
-        launch_script = workspace / "glue" / "prepare_and_launch.sh"
-        if not launch_script.exists():
-            print(f"   ❌ {launch_script} not found")
+        # ── Find and run the glue entry script ────────────────────────
+        launch_script = None
+        glue_ws = workspace / "glue"
+        if glue_ws.is_dir():
+            # Try common names in priority order
+            for name in ("prepare_and_launch.sh", "submit_all.sh", "run.sh", "launch.sh"):
+                candidate = glue_ws / name
+                if candidate.exists():
+                    launch_script = candidate
+                    break
+            # Fallback: first .sh file in glue/
+            if not launch_script:
+                for f in sorted(glue_ws.iterdir()):
+                    if f.suffix == ".sh" and f.name != "check_results.sh":
+                        launch_script = f
+                        break
+
+        if not launch_script:
+            print(f"\n   ❌ No launch script found in glue/")
             break
 
+        launch_rel = launch_script.relative_to(workspace)
+        print(f"\n🚀 Running {launch_rel}...")
+
         rc, launch_output = _run_cmd(
-            f"bash glue/prepare_and_launch.sh",
+            f"bash {launch_rel}",
             cwd=str(workspace), timeout=600,
         )
         print(launch_output[-2000:] if len(launch_output) > 2000 else launch_output)
@@ -1365,7 +1358,7 @@ def _run_pilot_loop(
         if rc != 0:
             (iter_log / "launch_error.log").write_text(
                 f"LAUNCH FAILURE (exit code {rc})\n"
-                f"Script: glue/prepare_and_launch.sh\n"
+                f"Script: {launch_rel}\n"
                 f"--- stdout+stderr ---\n{launch_output}\n"
             )
             print(f"\n⚠  Launch exited with code {rc}")
@@ -1375,35 +1368,49 @@ def _run_pilot_loop(
         active_job_ids.clear()
         active_job_ids.extend(job_ids)
 
+        # If launch failed and no jobs were submitted, skip result check
+        # and go straight to diagnose — nothing could have succeeded.
+        launch_failed = (rc != 0 and not job_ids)
+
         if rc == 0 and job_ids:
             print(f"\n⏳ Waiting for {len(job_ids)} job(s): {', '.join(job_ids)}")
-            _wait_for_jobs(job_ids, poll_interval=poll_interval, timeout=7200)
+            _wait_for_jobs(job_ids, poll_interval=poll_interval, timeout=max_wait)
 
         # ── Snapshot workspace ────────────────────────────────────────
         _snapshot_workspace(workspace, iter_log)
 
         # ── Check results ─────────────────────────────────────────────
-        check_script = workspace / "glue" / "check_results.sh"
-        if check_script.exists():
-            print(f"\n🔎 Checking results...")
-            check_rc, check_output = _run_cmd(
-                f"bash glue/check_results.sh {workspace}",
-                cwd=str(workspace), timeout=60,
-            )
-            print(f"   {check_output}")
-
-            if check_rc == 0:
-                print(f"\n🎉 Pilot PASSED on iteration {iteration}!")
-                print(f"   {check_output}")
-                (iter_log / "check_passed.json").write_text(
-                    json.dumps({"status": "passed", "iteration": iteration,
-                                "output": check_output})
+        if launch_failed:
+            print(f"\n❌ Launch failed with no jobs submitted — skipping result check.")
+        else:
+            check_script = workspace / "glue" / "check_results.sh"
+            if check_script.exists():
+                print(f"\n🔎 Checking results...")
+                check_rc, check_output = _run_cmd(
+                    f"bash glue/check_results.sh {workspace}",
+                    cwd=str(workspace), timeout=60,
                 )
-                _save_dev_log(log_dir, timestamp, plugin_dir, provider, model,
-                              smoke, generated, test_input, iteration, "passed")
-                return {"status": "passed", "iteration": iteration}
+                print(f"   {check_output}")
 
-            print(f"   ⚠  check_results exited {check_rc} — proceeding to diagnose")
+                if check_rc == 0:
+                    # Verify this isn't a stub/fake success from auto-fix
+                    stub = _detect_stub_success(workspace, launch_output)
+                    if stub:
+                        print(f"\n⚠  Checker passed but output is a stub: {stub}")
+                        print(f"   Auto-fix created a skip/fake path — not a real pass.")
+                        print(f"   Proceeding to diagnose.")
+                    else:
+                        print(f"\n🎉 Pilot PASSED on iteration {iteration}!")
+                        print(f"   {check_output}")
+                        (iter_log / "check_passed.json").write_text(
+                            json.dumps({"status": "passed", "iteration": iteration,
+                                        "output": check_output})
+                        )
+                        _save_dev_log(log_dir, timestamp, plugin_dir, provider, model,
+                                      smoke, generated, test_input, iteration, "passed")
+                        return {"status": "passed", "iteration": iteration}
+                else:
+                    print(f"   ⚠  check_results exited {check_rc} — proceeding to diagnose")
 
         # ── Diagnose + auto-fix ───────────────────────────────────────
         print(f"\n🔍 Running diagnose + auto-fix...")

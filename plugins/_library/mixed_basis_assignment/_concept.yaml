@@ -1,0 +1,25 @@
+name: mixed_basis_assignment
+description: Assign high basis to metals + reactive atoms and low basis to remaining atoms; print assignment summary.
+category: science
+interface:
+  inputs:
+  - elements
+  - metal_indices
+  - reactive_atoms
+  - config
+  outputs:
+  - basis_assignment dict with sets and basis names
+invariants:
+- "High basis atoms = metal_indices \u222A reactive_atoms."
+- Low basis atoms = all atoms minus high basis atoms.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.inp
+    lines: 38
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Basis names come from config['orca'].

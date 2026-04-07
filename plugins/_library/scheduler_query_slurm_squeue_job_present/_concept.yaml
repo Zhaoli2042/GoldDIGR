@@ -1,0 +1,33 @@
+name: scheduler_query_slurm_squeue_job_present
+description: Determine whether a Slurm job ID is still present (RUNNING/PENDING) in the queue.
+category: scheduler
+interface:
+  inputs:
+  - JOB_ID
+  outputs:
+  - Exit code 0 if present; 1 if not present
+invariants:
+- Poll in a loop with sleep to avoid hammering scheduler.
+- 'Uses: squeue -j <jobid> -h | grep -q <jobid>.'
+- Treat Slurm states R/PD/CG as active.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 19
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: squeue errors are suppressed to avoid noisy audits.
+  poll_until_jobids_absent_barrier:
+    file: poll_until_jobids_absent_barrier.sh
+    lines: 65
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/util/monitor_jobs.py
+    notes: This is a blocking barrier; it does not resubmit or heal failures.

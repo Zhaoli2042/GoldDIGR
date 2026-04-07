@@ -1,0 +1,119 @@
+=== MATCH: status_file_fallback → auto3d_log_discovery_and_copy ===
+Variant_name: status_json_fallback_search_ordered_paths
+Reason: Same pattern of trying canonical fallback locations to find a status/log artifact near a job/output tree.
+=== END MATCH ===
+
+=== NEW: stage_status_normalization ===
+Reason: Library has status emit/aggregate concepts but no dedicated per-stage status normalization helper.
+=== END NEW ===
+
+=== NEW: metric_extraction_dft_irc ===
+Reason: No existing concept extracts/pretty-prints DFT IRC energy metrics from a workflow_status-like dict.
+=== END NEW ===
+
+=== MATCH: cli_dashboard_dft_table → ops_status_dashboard ===
+Variant_name: dft_jobs_tree_cli_table_with_stage_barriers
+Reason: Both are CLI operational dashboards that scan a run tree and summarize statuses/failures for humans.
+=== END MATCH ===
+
+=== MATCH: reaction_table_driven_batching → smiles_prefix_parsing_and_batch_dict_generation ===
+Variant_name: tsv_reaction_info_to_jobs_fanout_and_job_list
+Reason: Same function: table-driven batching that fans out per-item job directories and writes a deterministic work list.
+=== END MATCH ===
+
+=== NEW: array_index_manifest ===
+Reason: Library has throttled submission and manifests for inputs, but no explicit “array index → job dir via job_list.txt” mapping contract.
+=== END NEW ===
+
+=== NEW: centralized_logging_sge_array ===
+Reason: No existing concept specifically covers SGE array stdout/stderr redirection into a centralized logs/ namespace.
+=== END NEW ===
+
+=== MATCH: container_bind_mount_pattern_ro_inputs_rw_outputs → htcondor_submit_file_transfer_and_remap ===
+Variant_name: singularity_bind_ro_inputs_rw_outputs_split_workdirs
+Reason: Same container I/O isolation idea: separate read-only inputs from writable execution/output locations to avoid permission issues.
+=== END MATCH ===
+
+=== MATCH: tarball_handshake_interface → result_packaging_tarball ===
+Variant_name: single_handoff_results_tar_gz_for_container_consumption
+Reason: Same function: produce a single tar.gz artifact as the handoff/packaging interface for downstream consumption.
+=== END MATCH ===
+
+=== NEW: workflow_override_by_bind_mount ===
+Reason: Library has container execution/binds, but not the specific pattern of overriding an internal module by bind-mounting a host script onto the container path.
+=== END NEW ===
+
+=== NEW: final_status_promotion ===
+Reason: No existing concept promotes/copies a workflow status file from output/ into a job-root “final_status.json” for monitoring convenience.
+=== END NEW ===
+
+=== NEW: sge_array_task_wrapper_two_phase ===
+Reason: Existing wrappers are per-zip/per-task, but none match the specific two-phase SGE array wrapper (select job dir → preprocess in container → tarball → run full workflow) as a single concept.
+=== END NEW ===
+
+=== MATCH: config_merge_with_defaults → config_key_validation ===
+Variant_name: json_config_merge_known_keys_into_orca_defaults
+Reason: Same function: load user config and enforce/merge into a controlled default schema (with type/resource fields).
+=== END MATCH ===
+
+=== MATCH: xyz_read_write → xyz_write_single_frame ===
+Variant_name: minimal_xyz_read_and_write_with_comment_roundtrip
+Reason: Same core XYZ single-frame I/O capability (write contract already exists; this adds a minimal reader as a variant).
+=== END MATCH ===
+
+=== MATCH: multi_xyz_trajectory_parsing → xyz_trajectory_read_multi ===
+Variant_name: last_frame_extraction_for_restart
+Reason: Same function: parse multi-frame XYZ trajectories; extracting the last frame is a straightforward variant use.
+=== END MATCH ===
+
+=== NEW: sigma_bond_change_filtering_string_contract ===
+Reason: Library has BEM delta detection but no concept for parsing/contracting a bond_changes string and filtering to sigma-only changes.
+=== END NEW ===
+
+=== NEW: metal_detection_by_element_set ===
+Reason: No existing concept detects metals via an element allowlist (optionally with neighbor finding).
+=== END NEW ===
+
+=== NEW: mixed_basis_assignment ===
+Reason: Library has ORCA input templating, but not mixed-basis assignment logic based on metals/reactive atoms.
+=== END NEW ===
+
+=== NEW: orca_coord_block_per_atom_newgto ===
+Reason: No existing concept generates ORCA coordinate blocks with per-atom basis via newgto directives.
+=== END NEW ===
+
+=== NEW: orca_input_copt_with_constraints ===
+Reason: Existing ORCA template is single-point; no constrained optimization (COPT) template with bond constraints + mixed basis exists.
+=== END NEW ===
+
+=== NEW: orca_input_tsopt_template ===
+Reason: No existing ORCA TS optimization (TSOPT) input template concept in the library.
+=== END NEW ===
+
+=== NEW: read_only_input_workaround_yarp ===
+Reason: Library has container RO/RW patterns, but not a tool-specific workaround for YARP writing temp files next to read-only inputs.
+=== END NEW ===
+
+=== NEW: bond_change_format_contract_bem ===
+Reason: Library covers BEM loading/diffing for reactivity, but not encoding reactant/product BEM bond changes into a semicolon-separated string contract with sigma-change counting.
+=== END NEW ===
+
+=== NEW: input_consistency_validation_xyz_triplet ===
+Reason: No existing concept validates a required R/P/TS XYZ triplet for atom count and element ordering consistency.
+=== END NEW ===
+
+=== NEW: bem_sanity_checks ===
+Reason: Library has reactive summaries but no explicit “sanity check and issue list” validator for BEM-derived bond-change results.
+=== END NEW ===
+
+=== NEW: workflow_status_seed ===
+Reason: Library writes status.json manifests, but not a minimal workflow_status.json seed capturing charge/mult/bond_changes + preprocessing status.
+=== END NEW ===
+
+=== NEW: ts_guess_generation_and_seed_files ===
+Reason: No existing concept packages this specific preprocessing: copy TS→ts_guess, stage R/P into output, and write workflow_status.json.
+=== END NEW ===
+
+=== NEW: artifact_exclusion_golddigrignore ===
+Reason: Library has packaging/backup concepts but no ignore-pattern contract specifically for excluding heavy artifacts during packaging/ingestion.
+=== END NEW ===

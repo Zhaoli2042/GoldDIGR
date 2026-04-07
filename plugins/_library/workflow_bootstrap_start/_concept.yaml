@@ -1,0 +1,84 @@
+name: workflow_bootstrap_start
+description: One-button launcher that bootstraps directories, inventories inputs, chunks worklists, configures submit file,
+  and starts tmux monitors.
+category: scheduler
+interface:
+  inputs:
+  - '{{CONTAINER_IMAGE_URI}}'
+  - '{{JOBS_PER_CHUNK}}'
+  - '{{MAX_JOBS}}'
+  - '{{INPUT_TARBALL_GLOB}}'
+  outputs:
+  - inputs/
+  - results/
+  - logs/
+  - submitted_batches/
+  - file_list.txt
+  - job_*.txt
+  - configured batch_job.submit
+  - tmux sessions
+invariants:
+- HTCondor submit file is configured by in-place token replacement before any submission.
+- Chunk size fixed by JOBS_PER_CHUNK; preserve line order.
+- Chunk numbering must not collide with existing job_*.txt in either root or submitted_batches/.
+- Kill existing 'health' session if present, then start a new one in workflow directory.
+- Start submit monitor in workflow directory so relative paths work.
+- tmux sessions are named submit/health/backup and are killed/recreated on start.
+- Input tarballs must contain .zip files under nested directories; extraction preserves structure.
+- Must run from the workflow directory; uses relative paths and writes file_list.txt/job_*.txt.
+- "RESOURCE_LEVELS block replacement must match the script\u2019s existing block boundaries."
+- Only kill/restart 'submit' session; do not touch 'health' or 'backup'.
+- Chunk files are named job_N.txt and pending chunks are removed/recreated on fresh start.
+- Edits must be safe to re-run (detect already-updated values).
+variants:
+  DFT-singlepoint-OSG-Condor_default:
+    file: DFT-singlepoint-OSG-Condor_default.sh
+    lines: 235
+    scheduler: htcondor
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Expects GNU userland (sed -i, stat -c). Token mismatch in original submit file may prevent container URI replacement
+      unless submit file uses __CONTAINER_IMAGE__.
+  append_only_chunking_with_continuous_jobN_across_batches:
+    file: append_only_chunking_with_continuous_jobN_across_batches.sh
+    lines: 44
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From add_data.sh step 4.
+  restart_only_submit_tmux_session_to_pick_up_new_chunks:
+    file: restart_only_submit_tmux_session_to_pick_up_new_chunks.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From add_data.sh step 5.
+  idempotent_sed_patch_workflow_configs_with_error_count:
+    file: idempotent_sed_patch_workflow_configs_with_error_count.inp
+    lines: 76
+    scheduler: htcondor
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: "From apply_memory_fix.sh steps 1\u20133 (as-is; includes warnings when patterns don\u2019t match)."
+  restart_health_tmux_session_after_policy_change:
+    file: restart_health_tmux_session_after_policy_change.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: From apply_memory_fix.sh step 5.

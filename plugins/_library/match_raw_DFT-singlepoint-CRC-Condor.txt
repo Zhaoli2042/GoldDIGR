@@ -1,0 +1,129 @@
+=== MATCH: incremental_input_ingest_from_archives → incremental_ingest_set_difference ===
+Variant_name: tarball_ingest_append_new_zips_with_cleanup_and_newcount
+Reason: Same idempotent “extract tarballs + append only previously-untracked zips to file_list.txt” ingest function.
+=== END MATCH ===
+
+=== MATCH: directory_mirroring_results_tree → directory_structure_mirroring ===
+Variant_name: mirror_inputs_tree_under_results_for_remapped_outputs
+Reason: Same directory-tree mirroring behavior (create target subdirs matching source) for idempotent structure preservation.
+=== END MATCH ===
+
+=== MATCH: chunked_job_list_continuous_numbering → workflow_bootstrap_start ===
+Variant_name: append_only_chunking_with_continuous_jobN_across_batches
+Reason: Same “create job_N.txt chunk files from a worklist” concept; this variant continues numbering across existing submitted/pending chunks.
+=== END MATCH ===
+
+=== MATCH: tmux_restart_submit_monitor_only → workflow_bootstrap_start ===
+Variant_name: restart_only_submit_tmux_session_to_pick_up_new_chunks
+Reason: Same tmux-based workflow monitoring/submit-session management; this variant restarts only the submit monitor.
+=== END MATCH ===
+
+=== MATCH: bulk_config_patch_with_sed → workflow_bootstrap_start ===
+Variant_name: idempotent_sed_patch_workflow_configs_with_error_count
+Reason: Same operational pattern of programmatically patching workflow config/scripts in-place as part of managing the workflow.
+=== END MATCH ===
+
+=== MATCH: htcondor_qedit_lower_idle_memory → health_monitor_autoheal_held_jobs ===
+Variant_name: constraint_qedit_reduce_requestmemory_for_idle_jobs
+Reason: Same HTCondor job ClassAd editing via condor_qedit to adjust resources; this variant targets IDLE jobs and lowers memory.
+=== END MATCH ===
+
+=== MATCH: tmux_restart_health_monitor → workflow_bootstrap_start ===
+Variant_name: restart_health_tmux_session_after_policy_change
+Reason: Same tmux session lifecycle management for monitors; this variant specifically restarts the health monitor session.
+=== END MATCH ===
+
+=== MATCH: verified_archival_with_manifest_and_atomic_rename → results_backup_verified_aggregation ===
+Variant_name: tar_gz_backup_with_manifest_verification_and_atomic_rename_then_delete
+Reason: Same verified backup aggregation with manifest + verify + atomic rename before deleting originals.
+=== END MATCH ===
+
+=== MATCH: age_and_quiet_time_eligibility_scan → results_backup_verified_aggregation ===
+Variant_name: eligible_tarball_selection_by_min_age_and_quiet_time
+Reason: Same backup eligibility policy (min age + min quiet time) used to select result tarballs for archiving.
+=== END MATCH ===
+
+=== MATCH: resume_incomplete_backups_from_manifests → results_backup_verified_aggregation ===
+Variant_name: resume_retry_backups_using_in_progress_manifests_and_tmp_validation
+Reason: Same manifest-driven resume/retry mechanism for interrupted backups with tmp-archive handling.
+=== END MATCH ===
+
+=== MATCH: destination_disk_usage_alert → results_backup_verified_aggregation ===
+Variant_name: backup_destination_filesystem_usage_threshold_guard
+Reason: Same backup-ops monitoring concern; this variant adds a disk-usage threshold check/alert around the backup destination.
+=== END MATCH ===
+
+=== MATCH: htcondor_submit_descriptor_queue_from_two_column_csv → htcondor_submit_file_transfer_and_remap ===
+Variant_name: queue_from_two_column_csv_and_remap_results_to_nested_tree
+Reason: Same HTCondor submit descriptor pattern: queue from (zip_abspath, zip_relpath) list and remap results.tar.gz into structured results tree.
+=== END MATCH ===
+
+=== MATCH: capacity_aware_staged_submission_monitor → slurm_submit_throttle_by_batchtag ===
+Variant_name: htcondor_dripfeed_chunk_submission_with_max_queue_and_move_to_submitted
+Reason: Same throttled “drip-feed chunk files when queue below MAX_JOBS and move chunks to submitted_batches/ for idempotency” submission loop.
+=== END MATCH ===
+
+=== MATCH: htcondor_health_monitor_autorepair → health_monitor_autoheal_held_jobs ===
+Variant_name: holdreason_classifier_with_release_and_resource_ladder_and_disk_upgrade
+Reason: Same periodic HTCondor held-job autoheal: classify HoldReason, qedit escalation/tracking, and release.
+=== END MATCH ===
+
+=== MATCH: container_wrapper_for_condor_apptainer → htcondor_submit_file_transfer_and_remap ===
+Variant_name: apptainer_wrapper_executable_with_bind_mount_workdir
+Reason: Same “containerized executable wrapper used under HTCondor” function; this variant is explicitly Apptainer with bind-mounted workdir.
+=== END MATCH ===
+
+=== MATCH: charge_multiplicity_from_zip_filename → charge_multiplicity_from_filename ===
+Variant_name: parse_charge_mult_from_last_two_underscore_fields_basename
+Reason: Same filename-token parsing contract: charge=NF-1 and mult=NF from underscore-delimited zip basename.
+=== END MATCH ===
+
+=== MATCH: walltime_watchdog_kill_orca → watchdog_walltime_kill_orca ===
+Variant_name: background_watchdog_kill_orca_near_wall_limit_for_partial_pack
+Reason: Same walltime watchdog pattern that terminates ORCA near allocation end (soft then hard kill).
+=== END MATCH ===
+
+=== MATCH: mpi_oversubscribe_fix_for_opportunistic_nodes → mpi_env_orca_ompi_overrides ===
+Variant_name: ompi_slot_binding_mitigation_for_opportunistic_execute_nodes
+Reason: Same function of setting OMPI/OpenMPI environment overrides to avoid slot/binding/transport errors for ORCA.
+=== END MATCH ===
+
+=== MATCH: orca_input_template_singlepoint_wbo → orca_input_template_generation ===
+Variant_name: wb97xv_def2tzvp_singlepoint_template_with_bond_order_outputs
+Reason: Same ORCA single-point input template generation with fixed method/basis and bond-order-relevant output blocks.
+=== END MATCH ===
+
+=== MATCH: multiwfn_bond_order_automation → multiwfn_batch_mode_bond_orders ===
+Variant_name: noninteractive_multiwfn_nogui_mayer_wiberg_fuzzy_from_orca_molden
+Reason: Same scripted Multiwfn_noGUI automation to compute Mayer/Wiberg/Fuzzy bond order matrices from ORCA outputs.
+=== END MATCH ===
+
+=== MATCH: round2_skip_list_reader → round2_skiplist_loader ===
+Variant_name: load_skip_txt_and_mark_complete_previous_round
+Reason: Same skip.txt loader contract populating a skip set and marking molecules as complete_previous_round.
+=== END MATCH ===
+
+=== MATCH: status_json_for_partial_resubmission → status_json_manifest ===
+Variant_name: status_json_with_per_molecule_states_and_round2_detection_fields
+Reason: Same status.json emission capturing overall status and per-molecule statuses for partial/resubmission logic.
+=== END MATCH ===
+
+=== MATCH: results_packaging_selected_outputs → result_packaging_tarball ===
+Variant_name: pack_selected_outputs_emit_minimal_tarball_when_missing
+Reason: Same “always produce results.tar.gz with selected outputs (at least status.json)” packaging behavior.
+=== END MATCH ===
+
+=== MATCH: round2_partial_detection_via_status_json_in_tarballs → round2_prepare_from_partial_results ===
+Variant_name: scan_tarballs_for_status_json_partial_and_write_partial_jobs_list
+Reason: Same partial detection mechanism: inspect status.json inside result/backup tarballs to find partial jobs.
+=== END MATCH ===
+
+=== MATCH: round2_zip_builder_with_carry_forward_and_skip_txt → round2_prepare_from_partial_results ===
+Variant_name: build_round2_zips_carry_forward_completed_outputs_and_write_skip_txt
+Reason: Same round-2 preparation: create new input zips for unfinished molecules, carry forward completed outputs, and include skip.txt.
+=== END MATCH ===
+
+=== MATCH: workflow_status_dashboard_cli → ops_status_dashboard ===
+Variant_name: cli_ops_dashboard_queue_chunks_holds_results_backups_tmux_escalation
+Reason: Same operational dashboard summarizing HTCondor state, chunk progress, holds, results/backups, tmux sessions, and escalation tracking.
+=== END MATCH ===

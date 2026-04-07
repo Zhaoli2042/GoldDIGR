@@ -1,0 +1,36 @@
+name: jsonl_aggregate_over_parent_dirs
+description: Scan parent directories for zip archives, process each, and write one JSON object per line (JSONL).
+category: monitoring
+interface:
+  inputs:
+  - finished_path
+  - out_path
+  outputs:
+  - JSONL file
+invariants:
+- Output directory is created if missing.
+- Returns [] if BENCH_DIR does not exist.
+- Only files ending with .zip are scanned.
+- Only includes files ending with .json.
+- Writes records streaming (no need to hold all in memory).
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 50
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: "This is the operational \u201CSTATUS/aggregation\u201D artifact for downstream indexing."
+  sorted_json_file_listing_in_dir:
+    file: sorted_json_file_listing_in_dir.sh
+    lines: 18
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - get_auto3d_calc_status
+    notes: Consumer-side block for status aggregation.

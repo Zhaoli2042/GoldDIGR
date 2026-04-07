@@ -27,9 +27,18 @@ python run.py --retry-failed
 ## Plugin System (runs on host, no container)
 
 ```bash
-python plugin.py develop <path>    # incremental test-driven development
-python plugin.py catalog <path>    # catalog into knowledge base
-python plugin.py diagnose <name>   # LLM failure diagnosis
+# Two main commands:
+python plugin.py develop <path>                  # unified: generate + test + fix
+python plugin.py catalog <path>                  # catalog into knowledge base
+
+# develop modes:
+python plugin.py develop <path> --real-data      # use real XYZ instead of synthetic
+python plugin.py develop <path> --prep-only      # prepare workspace, launch manually
+python plugin.py develop <path> --resume <dir>   # resume from existing workspace
+python plugin.py develop <path> --port-to slurm  # port to different scheduler + test
+python plugin.py develop <path> --diagnose-only  # diagnose existing failures only
+
+# Utilities:
 python plugin.py probe             # detect cluster infrastructure
 python plugin.py list              # list registered plugins
 ```
@@ -60,13 +69,15 @@ Each stage is idempotent. Any stage can fail independently without affecting oth
 - `metadata.py` — HTML meta tags → BibLaTeX; DOI extraction and path conversion
 - `cc_detector.py` — Keyword-based comp-chem detection + LLM extraction
 - `agent/` — Optional automated CAPTCHA solving via vision models (Qwen2.5-VL, Florence-2, or API)
-- `plugins/_utils.py` — Shared LLM client, interactive prompts, and output parsing for plugin modules
+- `plugins/_utils.py` — Shared LLM client, scheduler polling, result collection, interactive prompts, output parsing
 - `plugins/registry.py` — Plugin discovery, manifest loading, validation
-- `plugins/develop.py` — Incremental test-driven plugin development
-- `plugins/catalog.py` — Knowledge base cataloging
-- `plugins/diagnose.py` — LLM-powered failure diagnosis
+- `plugins/develop.py` — Unified plugin development: scaffold generation (via initializer), test input, smoke tests, pilot loop, auto-diagnose, porting
+- `plugins/initializer.py` — LLM-powered scaffold generation (plugin.yaml + glue scripts); called by develop
+- `plugins/catalog.py` — Knowledge base cataloging (standalone)
+- `plugins/diagnose.py` — LLM-powered failure analysis + auto-fix; called by develop
+- `plugins/porter.py` — Scheduler porting (SLURM ↔ HTCondor ↔ SGE ↔ PBS); called by develop --port-to
+- `plugins/pilot.py` — Deprecated, re-exports from _utils for backward compat
 - `plugins/packager.py` — XYZ → HPC submission tarballs
-- `plugins/porter.py` — Scheduler porting (SLURM ↔ HTCondor ↔ SGE ↔ PBS)
 
 **Configuration:** Single `config.yaml` with env var overrides. Three example configs provided for Docker, local Chrome, and local Firefox.
 

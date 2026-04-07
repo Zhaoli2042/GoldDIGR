@@ -1,0 +1,27 @@
+name: workflow_status_seed
+description: Create minimal workflow_status.json content capturing charge/mult/bond_changes and preprocessing status.
+category: monitoring
+interface:
+  inputs:
+  - r_xyz
+  - p_xyz
+  - ts_xyz
+  - charge
+  - mult
+  - bond_changes
+  outputs:
+  - workflow_status dict
+invariants:
+- input_data must include charge, mult, bond_changes, and source for provenance.
+- preprocessing.status is 'success' when created by adapter.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 34
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Downstream workflow reads input_data.bond_changes.

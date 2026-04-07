@@ -1,0 +1,11 @@
+samples:
+- file: samples/sample.xyz
+  type: xyz_geometry
+  size: 127
+  n_atoms: 3
+  elements:
+  - H
+  - O
+  n_files: null
+  contents: null
+  directories: null

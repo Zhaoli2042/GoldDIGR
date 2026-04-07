@@ -1,0 +1,30 @@
+name: orca_input_tsopt_template
+description: ORCA TS optimization (TSOPT) input template with mixed basis coordinate block and TS geom settings.
+category: science
+interface:
+  inputs:
+  - xyz_path
+  - output_path
+  - charge
+  - mult
+  - basis_assignment
+  - config
+  - nprocs
+  - maxcore
+  - job_name
+  outputs:
+  - ORCA .inp file at output_path
+invariants:
+- Keyword line includes OptTS FREQ and optional dispersion/extra_keywords.
+- Geom block includes Calc_Hess true, NumHess true, MaxIter 100.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.inp
+    lines: 41
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Function body is as provided (script snapshot was truncated after coord_block assignment).

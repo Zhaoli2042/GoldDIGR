@@ -1,0 +1,22 @@
+name: timestamped_logger
+description: Tee stdout to terminal and a timestamped log file.
+category: monitoring
+interface:
+  inputs:
+  - logname
+  outputs:
+  - '{{logname}}.{{timestamp}}.log'
+invariants:
+- Log filename includes a timestamp to avoid overwriting prior runs.
+- write() must forward to both terminal and file.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 27
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions.py
+    notes: '`sys.stdout = Logger(''run_name'')`'

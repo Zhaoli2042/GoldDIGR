@@ -1,0 +1,25 @@
+name: orca_coord_block_per_atom_newgto
+description: Generate an ORCA *xyz coordinate block with per-atom basis assignment using newgto directives.
+category: science
+interface:
+  inputs:
+  - xyz_path
+  - charge
+  - mult
+  - basis_assignment
+  outputs:
+  - coord_block string
+invariants:
+- Every atom line includes `newgto \"BASIS\" end` to enforce mixed basis.
+- Atom indices used for basis assignment are 0-based (Python enumerate).
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.inp
+    lines: 31
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Used by ORCA input generators.

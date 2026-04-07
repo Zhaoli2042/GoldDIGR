@@ -1,0 +1,22 @@
+name: recursive_tree_walk_bash
+description: Recursively generate a directory tree text file with correct branch prefixes and recursion-safe loop scoping.
+category: operational
+interface:
+  inputs:
+  - TARGET_DIR
+  outputs:
+  - folder_tree.txt (tree listing)
+invariants:
+- The loop variable must be local inside the recursive function to avoid being overwritten by recursion.
+- Enable dotglob/nullglob so hidden files are included and empty globs don't expand to literal patterns.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 55
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - make_tree.sh
+    notes: Run `bash make_tree.sh {{TARGET_DIR}}` (defaults to `.`).

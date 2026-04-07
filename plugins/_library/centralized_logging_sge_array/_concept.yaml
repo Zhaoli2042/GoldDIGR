@@ -1,0 +1,23 @@
+name: centralized_logging_sge_array
+description: Redirect per-task stdout/stderr into a shared logs/ directory for SGE array jobs.
+category: scheduler
+interface:
+  inputs:
+  - SGE_TASK_ID
+  - PIPELINE_DIR
+  outputs:
+  - logs/dft_${SGE_TASK_ID}.out and .err
+invariants:
+- Redirect must happen early so all output is captured.
+- Log filenames include SGE_TASK_ID to avoid collisions.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 17
+    scheduler: sge
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Create logs dir before exec redirection.

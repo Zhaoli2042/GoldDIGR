@@ -1,0 +1,31 @@
+name: xtb_spin_energy_tblite_driver
+description: Run xTB SCC with tblite spin-polarization to get stable spin energies and HOMO-LUMO gap.
+category: science
+interface:
+  inputs:
+  - xyz_path
+  - charge
+  - uhf
+  - workdir
+  - acc
+  - maxiter
+  outputs:
+  - dict(energy_Eh
+  - gap_eV
+  - stdout_file)
+invariants:
+- Uses --spinpol --tblite for the spin scan energy pass.
+- Writes stdout+stderr to a namespace-specific .out file in workdir.
+- Parses HOMO-LUMO gap from 'HOMO-LUMO gap ... eV' and energy from last 'TOTAL ENERGY ... Eh'.
+- Non-zero return code raises RuntimeError pointing to the .out file.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 42
+    scheduler: any
+    tool: xtb
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Namespace includes stem + UHF + SPIN to avoid collisions.

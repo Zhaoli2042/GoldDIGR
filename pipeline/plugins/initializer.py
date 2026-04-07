@@ -36,8 +36,19 @@ _MAX_PROMPT_CHARS = 120_000
 # File scanning
 # ═══════════════════════════════════════════════════════════════════════
 
-def _scan_plugin_dir(plugin_dir: Path) -> Dict[str, Any]:
-    info: Dict[str, Any] = {"readme": None, "environment": None, "scripts": [], "templates": []}
+def scan_plugin_dir(plugin_dir: Path) -> Dict[str, Any]:
+    """Scan a plugin directory for scripts, README, samples, glue, etc.
+
+    Returns a superset schema used by both initializer and develop:
+      readme, environment, scripts, templates, samples, glue_exists, glue_files
+    """
+    info: Dict[str, Any] = {
+        "readme": None, "environment": None,
+        "scripts": [], "templates": [],
+        "samples": [],
+        "glue_exists": (plugin_dir / "glue").is_dir(),
+        "glue_files": [],
+    }
     _SCRIPT_EXTS = (".py", ".sh", ".bash", ".r", ".R", ".submit")
 
     try:
@@ -61,6 +72,9 @@ def _scan_plugin_dir(plugin_dir: Path) -> Dict[str, Any]:
             info["environment"] = ep.read_text(errors="ignore")[:5000]
             break
 
+    # Directories to always skip (backups, build artifacts, workspaces)
+    _EXCLUDE_DIRS = {"glue", "glue.bak", "glue.pre-fix.bak", "dev_logs", "workspace", "__pycache__"}
+
     # Scan scripts/ directory and root; also scan all subdirs for deeper layouts
     scripts_dir = plugin_dir / "scripts"
     if scripts_dir.is_dir():
@@ -77,6 +91,10 @@ def _scan_plugin_dir(plugin_dir: Path) -> Dict[str, Any]:
     # Also scan plugin root and all subdirs (for non-standard layouts like MD/)
     for sf in sorted(plugin_dir.rglob("*")):
         if sf.is_file() and sf.suffix in _SCRIPT_EXTS:
+            # Skip files inside excluded directories
+            rel_parts = sf.relative_to(plugin_dir).parts
+            if rel_parts and rel_parts[0] in _EXCLUDE_DIRS:
+                continue
             if ig_patterns and should_ignore(sf, plugin_dir, ig_patterns):
                 continue
             if not any(s["name"] == sf.name for s in info["scripts"]):
@@ -98,7 +116,34 @@ def _scan_plugin_dir(plugin_dir: Path) -> Dict[str, Any]:
                     "name": tf.name, "content": content,
                 })
 
+    # Existing glue files
+    glue_dir = plugin_dir / "glue"
+    if glue_dir.is_dir():
+        for f in sorted(glue_dir.iterdir()):
+            if f.is_file():
+                rel = f"glue/{f.name}"
+                if rel not in info["glue_files"]:
+                    info["glue_files"].append(rel)
+
+    # Filter scripts that live in glue/ (they're tracked separately)
+    info["scripts"] = [s for s in info["scripts"] if not s["path"].startswith("glue/")]
+
+    # Samples
+    try:
+        from .samples import detect_samples, inspect_sample
+        raw_samples = detect_samples(plugin_dir)
+        for s in raw_samples[:5]:
+            inspected = inspect_sample(Path(s["path"]))
+            if inspected:
+                s.update(inspected)
+            info["samples"].append(s)
+    except Exception:
+        pass
+
     return info
+
+# Keep old name as alias for backward compat within this module
+_scan_plugin_dir = scan_plugin_dir
 
 
 def _extract_script_summary(script: Dict) -> str:
@@ -367,6 +412,17 @@ OUTPUT FORMAT:
 === FILE: glue/task_wrapper.sh ===
 #!/bin/bash
 ...script content...
+
+WORKFLOW GRAPH:
+If a WORKFLOW GRAPH section is provided in the context, it describes the \
+stage-by-stage execution pipeline of the plugin. Your glue MUST orchestrate \
+ALL stages in the graph, not just the final one. For each stage:
+  1. Check the gate condition from the previous stage
+  2. Run the stage's script/command using the correct tool
+  3. Produce the stage's expected outputs
+  4. Fill template placeholders with actual values from the input molecules
+The entry_point in the graph is what your glue should call or emulate. \
+Stats and visualization stages come AFTER compute stages, not instead of them.
 
 No markdown fences. No explanation outside the files.
 """
@@ -916,8 +972,36 @@ def init_plugin(
     except Exception as e:
         logger.debug("Container detection failed: %s", e)
 
+    # Load workflow graph from catalog if available
+    workflow_graph_context = ""
+    try:
+        from .catalog import load_catalog, format_workflow_graph_for_prompt
+        cat = load_catalog(plugins_root)
+        cat_plugins = cat.get("plugins", {})
+        # Check if current plugin has a graph
+        plugin_name = plugin_dir.name
+        for pname, pentry in cat_plugins.items():
+            if pname == plugin_name or pname.startswith(plugin_name[:20]):
+                wg = pentry.get("workflow_graph")
+                if wg:
+                    workflow_graph_context = format_workflow_graph_for_prompt(wg)
+                    print(f"   🔀 Loaded workflow graph ({len(wg.get('nodes', []))} stages)")
+                    break
+        # If no exact match, check for similar plugins with graphs
+        if not workflow_graph_context:
+            for pname, pentry in cat_plugins.items():
+                wg = pentry.get("workflow_graph")
+                if wg:
+                    workflow_graph_context = format_workflow_graph_for_prompt(wg)
+                    print(f"   🔀 Loaded reference workflow graph from '{pname}'")
+                    break
+    except Exception as e:
+        logger.debug("Workflow graph loading failed: %s", e)
+
     # Combine all context
     full_context = catalog_context
+    if workflow_graph_context:
+        full_context = workflow_graph_context + "\n" + full_context
     if snippet_context:
         full_context = snippet_context + "\n" + full_context
     if sample_context:

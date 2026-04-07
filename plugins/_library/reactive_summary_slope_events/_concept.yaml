@@ -1,0 +1,27 @@
+name: reactive_summary_slope_events
+description: Compute finite-difference slope events per reactive bond column and record top-N |slope| frames.
+category: monitoring
+interface:
+  inputs:
+  - df
+  - top_n
+  outputs:
+  - dict mapping column->summary(first
+  - last
+  - delta
+  - top_slope_events)
+invariants:
+- Data must be sorted by 'frame' before slope computation.
+- Slope uses forward/backward difference at ends and central difference in interior.
+- Top events are selected by descending |slope|.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 74
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Expects reactive_summary.csv format produced by reactive_bem_summary_transposed.

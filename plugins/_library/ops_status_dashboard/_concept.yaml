@@ -1,0 +1,72 @@
+name: ops_status_dashboard
+description: Lightweight operational dashboard summarizing queue, chunk progress, held reasons, results, backups, tmux sessions,
+  and resource escalation.
+category: monitoring
+interface:
+  inputs:
+  - working directory with logs/results/submitted_batches; HTCondor CLI; tmux
+  outputs:
+  - human-readable stdout report
+invariants:
+- Only return jobs for the current $USER in pending/running states.
+- Chunk progress is inferred from job_*.txt vs submitted_batches/job_*.txt.
+- Held job summary uses HoldReason aggregation.
+- Held job reasons are summarized by HoldReason frequency.
+- Detect scheduler by presence of `squeue` or `qstat` in PATH.
+- Must not fail if condor_q or tmux are unavailable; degrade gracefully.
+- Job discovery prefers job_list.txt ordering when present; otherwise lists jobs/.
+- Failure reasons pulled from status['dft_irc']['fail_reason'] when present.
+- Uses condor_q if available; otherwise degrades gracefully.
+- If Auto3D import fails, set _AUTO3D_AVAILABLE=False and skip computations rather than crashing.
+- Treat missing status as pending/running rather than failed.
+variants:
+  DFT-singlepoint-OSG-Condor_default:
+    file: DFT-singlepoint-OSG-Condor_default.sh
+    lines: 116
+    scheduler: htcondor
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Contains site-specific backup path logic; parameterize if reusing.
+  cli_ops_dashboard_queue_chunks_holds_results_backups_tmux_escalation:
+    file: cli_ops_dashboard_queue_chunks_holds_results_backups_tmux_escalation.sh
+    lines: 8
+    scheduler: htcondor
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: status.sh as-is.
+  slurm_pbs_detect_and_list_active_jobids_for_user:
+    file: slurm_pbs_detect_and_list_active_jobids_for_user.sh
+    lines: 100
+    scheduler: slurm | pbs
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions.py
+    notes: Caches detected scheduler and username on first call via function attributes.
+  optional_dependency_import_guard_with_warning:
+    file: optional_dependency_import_guard_with_warning.sh
+    lines: 15
+    scheduler: any
+    tool: auto3d
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - purdue_standby_auto3d_auto_batch
+    notes: Keep this pattern when deploying to heterogeneous nodes/environments.
+  dft_jobs_tree_cli_table_with_stage_barriers:
+    file: dft_jobs_tree_cli_table_with_stage_barriers.sh
+    lines: 142
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: This is the full tested script body.

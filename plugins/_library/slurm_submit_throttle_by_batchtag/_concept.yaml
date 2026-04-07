@@ -1,0 +1,78 @@
+name: slurm_submit_throttle_by_batchtag
+description: Queue-throttled SLURM submission loop that enforces a max number of queued/running jobs matching a batch tag.
+category: scheduler
+interface:
+  inputs:
+  - FINISHED_LIST_FILE
+  - BATCHNAME
+  - JOB_LIMIT
+  - CHECK_EVERY
+  - SUBMIT_TEMPLATE
+  outputs:
+  - sbatch submissions + generated per-parent submit files
+invariants:
+- Never exceed MAX_JOBS in queue; poll condor_q before each chunk submission.
+- Submits only files ending with .sub from GPU_SUBMISSIONS_DIR.
+- Move successfully submitted chunk file into submitted_batches/ to make restarts idempotent.
+- Throttle is implemented by counting squeue job names containing the batch tag.
+- Process chunk files in numeric order (job_1.txt, job_2.txt, ...).
+- Submit chunks in numeric order (job_1, job_2, ...).
+- Job counting uses squeue output filtered by a job-name substring; wrapper must set matching job name.
+- Duplicate submission is avoided by exact job-name match in squeue output.
+- Gate submission on total job count < MAX_JOBS.
+- Throttle condition is CURRENT_JOBS < MAX_JOBS.
+- Writes submitted filenames to submitted_jobs_list_auto3d_gpu.txt in CWD.
+- Never resubmit a chunk already present in submitted_batches/.
+- Hard cap prevents flooding scheduler (default max_submit=4900).
+- Sleep-and-retry loop continues until below limit.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 140
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Includes zip gating and template materialization as used in the workflow.
+  slurm_throttle_by_jobname_grep_polling:
+    file: slurm_throttle_by_jobname_grep_polling.sh
+    lines: 25
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: This is intentionally coupled to a job-name pattern (e.g., 'orca_wbo').
+  htcondor_throttle_by_queue_size_chunk_dripfeed:
+    file: htcondor_throttle_by_queue_size_chunk_dripfeed.sh
+    lines: 98
+    scheduler: htcondor
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Uses condor_q parsing heuristics; keep as-is for tested behavior.
+  htcondor_dripfeed_chunk_submission_with_max_queue_and_move_to_submitted:
+    file: htcondor_dripfeed_chunk_submission_with_max_queue_and_move_to_submitted.sh
+    lines: 69
+    scheduler: htcondor
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr
+    notes: monitor_submit.sh as-is.
+  directory_sbatch_bulk_submit_with_cap_and_tracking:
+    file: directory_sbatch_bulk_submit_with_cap_and_tracking.sh
+    lines: 20
+    scheduler: slurm
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - purdue_standby_auto3d_auto_batch
+    notes: Uses os.system; assumes sbatch is on PATH.

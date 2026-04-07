@@ -1,0 +1,23 @@
+name: metric_extraction_dft_irc
+description: Extract and format key energy metrics from the dft_irc block.
+category: monitoring
+interface:
+  inputs:
+  - status_dict
+  - key
+  outputs:
+  - formatted_string
+invariants:
+- Read metrics only from status_dict['dft_irc'] to match pipeline contract.
+- Missing metric => 'N/A' (string) for table printing.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 19
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: 'Keys used: forward_barrier_kcal, reverse_barrier_kcal, reaction_energy_kcal.'

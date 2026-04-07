@@ -1,0 +1,55 @@
+#!/bin/bash
+#
+#SBATCH --job-name=JOBNAME_PLACEHOLDER
+#SBATCH --output=run.out
+#SBATCH --error=run.err
+#SBATCH -A bsavoie
+#SBATCH --partition=cpu
+#SBATCH --qos=standby
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --time 04:00:00
+
+# Get the name of the directory this script is in (e.g., 03_-1_2)
+DIR_NAME=$(basename "$PWD")
+
+# Activate Conda environment 
+module load conda/2025.02
+conda activate another-yarp
+module load intel-mkl
+module load openmpi
+
+# Initial cleanup of previous failed runs if any
+rm -rf qm_calcs *.h5 *.log backward_end_optimization.trj backward_end_initial.xyz backward_end_rebuilt_primitives.xyz backward_irc.trj forward_end_initial.xyz forward_end_opt.xyz forward_end_optimization.trj forward_irc.trj left_ts_right_geoms.trj backward_end_opt.xyz
+
+# Run TSOPT, skipping if a previous run completed it
+if [ -f "ts_final_geometry.xyz" ] && [ -f "XXX-tsopt.out" ]; then
+    echo "Found existing TSOPT results for ${DIR_NAME}. Skipping TS optimization."
+else
+    echo "Running TS optimization for ${DIR_NAME}..."
+    pysis TSOPT.yaml > XXX-tsopt.out
+fi
+
+# Check if TS optimization was successful
+if [ ! -f "ts_final_geometry.xyz" ]; then
+    echo "TS optimization failed for ${DIR_NAME}. Exiting."
+    exit 1
+fi
+
+# Cleanup after TSOPT
+rm -rf qm_calcs *.h5 *.log backward_end_optimization.trj backward_end_initial.xyz backward_end_rebuilt_primitives.xyz backward_irc.trj forward_end_initial.xyz forward_end_opt.xyz forward_end_optimization.trj forward_irc.trj left_ts_right_geoms.trj backward_end_opt.xyz
+
+# Run IRC
+pysis TSOPT-IRC.yaml > XXX-irc.out
+
+# Final cleanup of all calculation-related files.
+# This ensures the final zip is clean and small.
+rm -rf qm_calcs *.h5 *.log backward_end_optimization.trj backward_end_initial.xyz backward_end_rebuilt_primitives.xyz backward_irc.trj forward_end_initial.xyz forward_end_opt.xyz forward_end_optimization.trj forward_irc.trj left_ts_right_geoms.trj backward_end_opt.xyz
+
+# Go one directory up to zip the results
+cd ..
+
+# Zip the directory and, if successful, remove the original folder
+zip -r "${DIR_NAME}.zip" "${DIR_NAME}" && rm -rf "${DIR_NAME}"
+
+wait

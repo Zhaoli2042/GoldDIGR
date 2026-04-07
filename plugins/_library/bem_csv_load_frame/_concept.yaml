@@ -1,0 +1,23 @@
+name: bem_csv_load_frame
+description: Read one per-frame bond electron matrix CSV into labels + dense float matrix.
+category: adapters
+interface:
+  inputs:
+  - path
+  outputs:
+  - labels(list[str])
+  - mat(list[list[float]])
+invariants:
+- Header row must be labels with an empty top-left cell; data starts at row 2, col 2.
+- Missing/blank/non-numeric entries must be treated as 0.0 (never crash).
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 35
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Used by time-series loader and reactive summarizer.

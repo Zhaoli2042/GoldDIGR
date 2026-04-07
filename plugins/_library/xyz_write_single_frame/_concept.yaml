@@ -1,0 +1,37 @@
+name: xyz_write_single_frame
+description: Write a single XYZ file from symbols and coordinates.
+category: adapters
+interface:
+  inputs:
+  - symbols
+  - coords
+  - outpath
+  - comment
+  outputs:
+  - writes XYZ file
+invariants:
+- Always writes natoms line then comment line then natoms coordinate lines.
+- Writer preserves element order and prints fixed-width floats.
+- XYZ atom count is taken from line 1; coordinates read from lines 3..N+2.
+- Coordinates are formatted with 8 decimals.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 16
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Used to materialize per-frame geometries for xTB.
+  minimal_xyz_read_and_write_with_comment_roundtrip:
+    file: minimal_xyz_read_and_write_with_comment_roundtrip.sh
+    lines: 35
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Appears in both scripts; keep identical behavior.

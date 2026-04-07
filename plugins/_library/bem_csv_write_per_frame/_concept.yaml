@@ -1,0 +1,28 @@
+name: bem_csv_write_per_frame
+description: Write per-frame dense bond-electrons and bond-orders CSVs from WBO pairs and nominal valence.
+category: adapters
+interface:
+  inputs:
+  - symbols
+  - charges
+  - wbo_pairs
+  - out_dir
+  - frame_idx
+  outputs:
+  - writes frame_#####_bond_electrons.csv and frame_#####_bond_orders.csv
+invariants:
+- Off-diagonal bond electrons = 2*WBO; bond orders = WBO.
+- 'Diagonal bond-electrons uses: nominal_valence(element) - sum_incident_WBO (conservation-consistent).'
+- All missing off-diagonals must be explicit 0.0 to stabilize downstream diffs.
+- 'Frame index is zero-padded to 5 digits: frame_00001_*.'
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 107
+    scheduler: any
+    tool: xtb | any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: '`charges` is accepted but not used in this implementation (kept as-tested).'

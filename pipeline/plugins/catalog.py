@@ -258,6 +258,295 @@ Output ONLY raw YAML. No markdown fences, no explanation text outside YAML.
 """
 
 
+_WORKFLOW_GRAPH_SYSTEM = """\
+You are a workflow architecture analyzer. You will receive all scripts, \
+templates, README, and plugin.yaml from a computational chemistry plugin.
+
+Your job: extract the DIRECTED ACYCLIC GRAPH of execution stages.
+
+For each stage/node, identify:
+- id: matches the stage name in plugin.yaml (if present), or a short slug
+- type: one of compute, analysis, stats, visualization, adapter
+  - compute = runs a computational tool (xTB, ORCA, Gaussian, pysisyphus)
+  - analysis = processes compute outputs (parsing, BEM, WBO extraction)
+  - stats = post-hoc aggregation/summarization
+  - visualization = generates plots/diagrams/sankey
+  - adapter = data format transformation (xyz→zip, charge/mult derivation)
+- tool: the computational tool used (xtb, pysisyphus, orca, yarp, python, bash)
+- scripts: list of script paths that implement this stage
+- templates: list of objects with path and placeholders for templates used
+- inputs: files/directories this stage reads (use the ACTUAL filenames from scripts)
+- outputs: files/directories this stage produces
+- description: one-line summary
+
+For each edge, identify:
+- from: source node id
+- to: target node id
+- gate: condition that must be met before target runs:
+  - type: file_exists | directory_exists | imaginary_freq | exit_code | custom
+  - file: the file to check (if applicable)
+  - threshold: numeric threshold (if applicable)
+  - description: human-readable gate description
+
+Also identify:
+- entry_point: the script that orchestrates the pipeline (NOT the stats script)
+- per_job_runner: the script submitted per-job to the scheduler
+- execution_order: flat list of node ids in execution order
+- template_placeholders: dict mapping placeholder names to descriptions
+
+RULES:
+- If plugin.yaml has stages with gates, use those stage names and gates
+- Trace data flow by reading scripts: what does stage N write that stage N+1 reads?
+- The entry_point is the ORCHESTRATION script, not a post-hoc stats/analysis script
+- Template files (.template) define compute parameters — capture their placeholders
+- For multi-stage pipelines, distinguish compute stages from analysis/stats stages
+- Single-stage plugins get one node with id "main"
+
+OUTPUT FORMAT (raw YAML only, no fences, no explanation):
+
+entry_point: "path/to/entry.sh"
+per_job_runner: "path/to/runner.sh"
+
+nodes:
+  - id: "stage_name"
+    type: "compute"
+    tool: "tool_name"
+    scripts:
+      - "path/to/script.sh"
+    templates:
+      - path: "path/to/template"
+        placeholders:
+          - "PLACEHOLDER_NAME"
+    inputs:
+      - "input_file_or_pattern"
+    outputs:
+      - "output_file_or_dir"
+    description: "what this stage does"
+
+edges:
+  - from: "source_id"
+    to: "target_id"
+    gate:
+      type: "gate_type"
+      file: "gate_file"
+      description: "human-readable description"
+
+execution_order:
+  - "stage_1"
+  - "stage_2"
+
+template_placeholders:
+  PLACEHOLDER_NAME: "description of what to fill in"
+
+Output ONLY raw YAML. No markdown fences, no explanation text.
+"""
+
+
+def _validate_workflow_graph(graph):
+    """Validate a workflow graph structure. Returns (valid, issues)."""
+    issues = []
+
+    if not isinstance(graph, dict):
+        return False, ["Graph must be a dict"]
+
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list) or len(nodes) == 0:
+        return False, ["'nodes' must be a non-empty list"]
+
+    node_ids = set()
+    for i, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            issues.append("Node %d is not a dict" % i)
+            continue
+        nid = node.get("id")
+        if not nid:
+            issues.append("Node %d missing 'id'" % i)
+        else:
+            if nid in node_ids:
+                issues.append("Duplicate node id: %s" % nid)
+            node_ids.add(nid)
+
+        ntype = node.get("type", "")
+        valid_types = ("compute", "analysis", "stats", "visualization", "adapter", "")
+        if ntype not in valid_types:
+            issues.append("Node '%s': unknown type '%s'" % (nid, ntype))
+
+    edges = graph.get("edges", [])
+    if not isinstance(edges, list):
+        issues.append("'edges' must be a list")
+        edges = []
+
+    for i, edge in enumerate(edges):
+        if not isinstance(edge, dict):
+            issues.append("Edge %d is not a dict" % i)
+            continue
+        efrom = edge.get("from", "")
+        eto = edge.get("to", "")
+        if efrom and efrom not in node_ids:
+            issues.append("Edge %d: 'from' references unknown node '%s'" % (i, efrom))
+        if eto and eto not in node_ids:
+            issues.append("Edge %d: 'to' references unknown node '%s'" % (i, eto))
+
+    exec_order = graph.get("execution_order", [])
+    if isinstance(exec_order, list):
+        for eid in exec_order:
+            if eid not in node_ids:
+                issues.append("execution_order references unknown node '%s'" % eid)
+
+    # Only fail on structural issues, not missing optional fields
+    critical = [i for i in issues if "non-critical" not in i
+                and "missing" not in i.lower()]
+    return len(critical) == 0, issues
+
+
+def extract_workflow_graph(plugin_dir, scan, provider="openai", model="gpt-4o"):
+    """Extract a workflow DAG from a plugin's scripts, templates, and manifest.
+
+    Uses a single LLM call to analyze all plugin content and produce a
+    structured workflow graph capturing stage dependencies, gate conditions,
+    template placeholders, and execution order.
+
+    Returns the graph dict, or None on failure.
+    """
+    from pathlib import Path
+    import yaml as _yaml
+    from ._utils import call_llm, fix_yaml_quoting
+
+    plugin_dir = Path(plugin_dir)
+    content_text, _ = _build_plugin_content(plugin_dir)
+
+    prompt = (
+        content_text + "\n\n"
+        "Extract the workflow graph from this plugin.\n"
+        "Trace data flow through scripts and templates to identify all stages,\n"
+        "their dependencies, and gate conditions.\n"
+        "Output ONLY raw YAML.\n"
+    )
+
+    print("   Asking %s/%s for workflow graph..." % (provider, model))
+    try:
+        raw = call_llm(provider, model, _WORKFLOW_GRAPH_SYSTEM, prompt, 0.2,
+                        max_tokens=8192)
+    except Exception as e:
+        logger.error("LLM error during workflow graph extraction: %s", e)
+        print("   ❌ LLM error: %s" % e)
+        return None
+
+    # Clean up response
+    raw = raw.strip()
+    if raw.startswith("```"):
+        import re
+        raw = re.sub(r"^```\w*\n?", "", raw)
+        raw = re.sub(r"\n?```$", "", raw)
+    raw = fix_yaml_quoting(raw)
+
+    try:
+        graph = _yaml.safe_load(raw)
+    except _yaml.YAMLError as e:
+        logger.error("Failed to parse workflow graph YAML: %s", e)
+        print("   ❌ YAML parse error: %s" % e)
+        return None
+
+    if not isinstance(graph, dict):
+        print("   ❌ Graph is not a dict")
+        return None
+
+    valid, issues = _validate_workflow_graph(graph)
+    if issues:
+        for issue in issues:
+            logger.debug("Workflow graph issue: %s", issue)
+    if not valid:
+        print("   ❌ Graph validation failed:")
+        for issue in issues:
+            print("      %s" % issue)
+        return None
+
+    return graph
+
+
+def format_workflow_graph_for_prompt(graph):
+    """Format a workflow graph as a concise text block for LLM prompts.
+
+    Returns empty string if graph is None or empty.
+    """
+    if not graph or not isinstance(graph, dict):
+        return ""
+
+    nodes = graph.get("nodes", [])
+    if not nodes:
+        return ""
+
+    parts = ["=== WORKFLOW GRAPH ==="]
+
+    entry = graph.get("entry_point", "?")
+    runner = graph.get("per_job_runner", "?")
+    parts.append("Entry point: %s" % entry)
+    parts.append("Per-job runner: %s" % runner)
+    parts.append("")
+
+    # Build edge lookup for gates
+    edge_map = {}
+    for edge in graph.get("edges", []):
+        edge_map[edge.get("from", "")] = edge
+
+    exec_order = graph.get("execution_order", [n["id"] for n in nodes])
+    parts.append("Execution pipeline (%d stages):" % len(exec_order))
+
+    node_map = {n["id"]: n for n in nodes}
+    for i, nid in enumerate(exec_order, 1):
+        node = node_map.get(nid, {})
+        ntype = node.get("type", "?")
+        tool = node.get("tool", "?")
+        desc = node.get("description", "")
+
+        inputs = ", ".join(node.get("inputs", []))
+        outputs = ", ".join(node.get("outputs", []))
+
+        parts.append("  %d. %s [%s/%s]" % (i, nid, ntype, tool))
+        if desc:
+            parts.append("     %s" % desc)
+        parts.append("     In: %s → Out: %s" % (inputs or "?", outputs or "?"))
+
+        # Scripts
+        scripts = node.get("scripts", [])
+        if scripts:
+            parts.append("     Scripts: %s" % ", ".join(scripts))
+
+        # Templates
+        templates = node.get("templates", [])
+        for t in templates:
+            pholders = ", ".join(t.get("placeholders", []))
+            parts.append("     Template: %s (%s)" % (t.get("path", "?"), pholders))
+
+        # Gate to next
+        edge = edge_map.get(nid)
+        if edge:
+            gate = edge.get("gate", {})
+            gate_type = gate.get("type", "?")
+            gate_file = gate.get("file", "")
+            gate_desc = gate.get("description", "")
+            threshold = gate.get("threshold")
+            gate_str = "%s %s" % (gate_type, gate_file)
+            if threshold:
+                gate_str += " (threshold=%s)" % threshold
+            if gate_desc:
+                gate_str += " — %s" % gate_desc
+            parts.append("     Gate to next: %s" % gate_str)
+
+        parts.append("")
+
+    # Template placeholders
+    placeholders = graph.get("template_placeholders", {})
+    if placeholders:
+        parts.append("Template placeholders to fill:")
+        for name, desc in placeholders.items():
+            parts.append("  %s: %s" % (name, desc))
+        parts.append("")
+
+    parts.append("=== END WORKFLOW GRAPH ===")
+    return "\n".join(parts)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Gap parsing
 # ═══════════════════════════════════════════════════════════════════════
@@ -694,6 +983,28 @@ def catalog_plugin(
         logger.debug("Container detection failed: %s", e)
     print()
 
+    # ── Workflow graph extraction ────────────────────────────────────
+    print("🔀 Extracting workflow graph...\n")
+    workflow_graph = None
+    try:
+        from .initializer import scan_plugin_dir
+        wg_scan = scan_plugin_dir(plugin_dir)
+        workflow_graph = extract_workflow_graph(plugin_dir, wg_scan, provider, model)
+        if workflow_graph:
+            n_nodes = len(workflow_graph.get("nodes", []))
+            n_edges = len(workflow_graph.get("edges", []))
+            entry_pt = workflow_graph.get("entry_point", "?")
+            print(f"   ✅ Extracted graph: {n_nodes} stages, {n_edges} transitions")
+            print(f"   Entry point: {entry_pt}")
+            for node in workflow_graph.get("nodes", []):
+                print(f"   • {node.get('id', '?')} [{node.get('type', '?')}]")
+        else:
+            print("   ⚠  Could not extract workflow graph (non-critical)")
+    except Exception as e:
+        logger.debug("Workflow graph extraction failed: %s", e)
+        print(f"   ⚠  Graph extraction failed: {e}")
+    print()
+
     # ── Generate catalog entry via LLM ────────────────────────────────
     print("📝 Generating catalog entry...\n")
 
@@ -783,6 +1094,10 @@ def catalog_plugin(
         except yaml.YAMLError:
             print("   Could not fix. Saving raw text.")
             entry = {"raw": raw_entry}
+
+    # Attach workflow graph if extracted
+    if workflow_graph:
+        entry["workflow_graph"] = workflow_graph
 
     # Mark completeness
     if unresolved_critical:

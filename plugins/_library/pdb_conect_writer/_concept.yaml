@@ -1,0 +1,25 @@
+name: pdb_conect_writer
+description: Write PDB with HETATM records and CONECT connectivity from adjacency matrix.
+category: adapters
+interface:
+  inputs:
+  - name
+  - elements
+  - geo
+  - adj_mat
+  - append_opt
+  outputs:
+  - .pdb file
+invariants:
+- Writes CONECT with up to 4 connections per line continuation.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 48
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/write_functions.py
+    notes: Useful for quick visualization.

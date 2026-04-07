@@ -1,0 +1,23 @@
+name: failure_list_for_retry
+description: 'Emit a retry list in the exact format expected by the submission manager: ''<ZIP_PATH> <REL_PATH>''.'
+category: monitoring
+interface:
+  inputs:
+  - FAILED_LOG
+  - ZIP_PATH
+  - REL_PATH
+  outputs:
+  - Appended retry line
+invariants:
+- 'Each line must be: ZIP_PATH<space>REL_PATH (no pipes, no commas).'
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 17
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: audit.sh writes this for downstream resubmission tooling.

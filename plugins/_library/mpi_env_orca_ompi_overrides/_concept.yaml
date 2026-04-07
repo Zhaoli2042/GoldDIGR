@@ -1,0 +1,45 @@
+name: mpi_env_orca_ompi_overrides
+description: Set OMPI and library environment variables used to run ORCA/MPI in this workflow runtime.
+category: compute
+interface:
+  inputs:
+  - none
+  outputs:
+  - Environment variables exported in current shell
+invariants:
+- Preserve OMPI_MCA_* overrides that disable UCX and force tcp/vader to avoid transport issues.
+- ORCA and Multiwfn paths are assumed under /opt.
+- PATH and LD_LIBRARY_PATH must include /opt/orca.
+- OMPI_MCA_* overrides are required to avoid slot/binding errors in this environment.
+- Set OMPI_MCA_rmaps_base_oversubscribe=1 and OMPI_MCA_hwloc_base_binding_policy=none before launching ORCA.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.inp
+    lines: 24
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Intended to be sourced at job start (inside container or preinstalled runtime).
+  htcondor_container_orca_openmpi_slot_binding_mitigations:
+    file: htcondor_container_orca_openmpi_slot_binding_mitigations.inp
+    lines: 12
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: isolated
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Assumes container layout /opt/orca and OpenMPI inside container.
+  ompi_slot_binding_mitigation_for_opportunistic_execute_nodes:
+    file: ompi_slot_binding_mitigation_for_opportunistic_execute_nodes.inp
+    lines: 9
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - golddigr
+    notes: From run_orca_wbo.sh.

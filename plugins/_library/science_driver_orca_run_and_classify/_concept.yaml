@@ -1,0 +1,25 @@
+name: science_driver_orca_run_and_classify
+description: Run ORCA on an input file, classify failure as timeout-killed vs generic failure, and clean intermediates on
+  failure.
+category: science
+interface:
+  inputs:
+  - MOL
+  - WATCHDOG_BUFFER
+  outputs:
+  - ORCA_EXIT code; prints status token to stdout
+invariants:
+- ORCA invocation path is /opt/orca/orca.
+- 'Timeout classification uses: time_remaining < WATCHDOG_BUFFER.'
+- 'On failure, remove heavy intermediates: *.gbw *.vpot *.dens *.tmp *.cis *.tx *.opt.'
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.inp
+    lines: 32
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Requires time_remaining() function in scope (from walltime_remaining_and_buffer_gate).

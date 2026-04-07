@@ -1,0 +1,25 @@
+name: charge_mult_electron_counting
+description: Compute total electrons from element symbols and charge; derive base UHF parity heuristic.
+category: science
+interface:
+  inputs:
+  - symbols
+  - charge
+  outputs:
+  - total_electrons(int)
+  - base_uhf(int)
+invariants:
+- Element symbols are normalized to 'Fe' style before lookup.
+- Total electrons = sum(Z) - charge.
+- Base UHF is 0 for even-electron systems else 1.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 44
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Extend EL_TO_Z if new elements appear.

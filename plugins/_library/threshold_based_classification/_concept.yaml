@@ -1,0 +1,29 @@
+name: threshold_based_classification
+description: Classify stability outcomes from bond quadratic elongation and angle variance cutoffs into formed/disordered/failed.
+category: science
+interface:
+  inputs:
+  - bond_lqe list
+  - angle_var list
+  - bond_lqe_cutoff
+  - angle_var_cutoff
+  outputs:
+  - formed(bool)
+  - disordered(bool)
+  - comments(str)
+  - stability_label(int)
+invariants:
+- bond_lqe_diff is abs(1.0 - bond_lqe_avg).
+- angle_var_diff is abs(angle_var_avg) (ideal 0).
+- Formed=2 if both pass; Formed+Disordered=1 if bond passes but angle fails; else 0.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 48
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/step3.collect_stabilities.py
+    notes: This is the core labeling logic used for downstream ML.

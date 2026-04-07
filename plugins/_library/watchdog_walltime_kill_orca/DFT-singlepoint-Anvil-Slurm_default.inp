@@ -1,0 +1,44 @@
+# ── SNIPPET: watchdog_walltime_kill_orca/DFT-singlepoint-Anvil-Slurm_default ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      golddigr_orca_multiwfn_anvil
+# Invariants:
+#   - WATCHDOG_DELAY = WALL_SECONDS - WATCHDOG_BUFFER.
+#   - Kill sequence: pkill (soft) then pkill -9 after 5s.
+#   - Trap EXIT to stop watchdog cleanly.
+# Notes: Designed for single-node jobs where pkill -f is acceptable.
+# ────────────────────────────────────────────────────────────
+
+#!/bin/bash
+# file: watchdog_walltime_kill_orca.sh
+
+WALL_SECONDS=${WALL_SECONDS:-86400}
+WATCHDOG_BUFFER="{{WATCHDOG_BUFFER}}"   # e.g., 900
+
+WATCHDOG_DELAY=$((WALL_SECONDS - WATCHDOG_BUFFER))
+WATCHDOG_PID=""
+
+start_watchdog() {
+  (
+    sleep "$WATCHDOG_DELAY"
+    echo -e "\n========================================"
+    echo "WATCHDOG: Wall time limit approaching! Killing ORCA..."
+    echo "========================================"
+    pkill -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -f "orca_" 2>/dev/null || true
+    sleep 5
+    pkill -9 -f "/opt/orca/orca" 2>/dev/null || true
+  ) &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
+}
+
+trap 'stop_watchdog' EXIT
+start_watchdog

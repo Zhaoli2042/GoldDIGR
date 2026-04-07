@@ -1,0 +1,41 @@
+# ── SNIPPET: watchdog_walltime_kill_orca/background_watchdog_kill_orca_near_wall_limit_for_partial_pack ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      golddigr
+# Notes: From run_orca_wbo.sh watchdog section.
+# ────────────────────────────────────────────────────────────
+
+#!/bin/bash
+set -e
+
+WALL_SECONDS=${WALL_SECONDS:-70200}
+WATCHDOG_BUFFER={{WATCHDOG_BUFFER:-1800}}
+
+WATCHDOG_DELAY=$((WALL_SECONDS - WATCHDOG_BUFFER))
+WATCHDOG_PID=""
+
+start_watchdog() {
+  (
+    sleep "$WATCHDOG_DELAY"
+    pkill -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -f "orca_" 2>/dev/null || true
+    sleep 5
+    pkill -9 -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -9 -f "orca_" 2>/dev/null || true
+  ) &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
+}
+
+trap 'stop_watchdog' EXIT
+start_watchdog
+
+# ... run compute payload here ...
+wait

@@ -1,0 +1,45 @@
+name: round2_skiplist_loader
+description: Load skip.txt into an associative array to skip already-completed molecules in a second round.
+category: monitoring
+interface:
+  inputs:
+  - SKIP_FILE
+  outputs:
+  - Declares/prints skip entries; sets SKIP_MOLECULES assoc array in current shell
+invariants:
+- Trim whitespace; ignore empty lines.
+- Use associative array membership test for fast skip checks.
+- skip.txt is line-oriented; trim whitespace with xargs; ignore empty lines.
+- skip.txt contains one molecule name per line; whitespace trimmed.
+- Skipped molecules must be recorded in MOL_STATUS as complete_previous_round.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Requires bash associative arrays.
+  round2_skip_contract_complete_previous_round:
+    file: round2_skip_contract_complete_previous_round.sh
+    lines: 21
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: isolated
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Used by run_orca_wbo.sh.
+  load_skip_txt_and_mark_complete_previous_round:
+    file: load_skip_txt_and_mark_complete_previous_round.sh
+    lines: 20
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - golddigr
+    notes: From run_orca_wbo.sh.

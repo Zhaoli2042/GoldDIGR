@@ -1,0 +1,59 @@
+name: walltime_remaining_and_buffer_gate
+description: Track elapsed time and provide a gate function to decide whether there is enough time to start another task.
+category: monitoring
+interface:
+  inputs:
+  - WALL_SECONDS
+  - BUFFER_SECONDS
+  outputs:
+  - 'Functions: time_remaining'
+  - have_time
+invariants:
+- Negative seconds are clamped to 0.
+- Precheck must run before starting each molecule; if insufficient time, mark remaining as timeout_skipped.
+- Returns 0 on empty input or parse failure.
+- Watchdog is cleaned up via trap on EXIT.
+- Supports exactly 3-part (H:M:S) and 2-part (M:S) formats.
+- Watchdog must kill ORCA processes before scheduler wall-kill to preserve time for packing results.
+- have_time returns success only if remaining > BUFFER_SECONDS.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 27
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Must set START_TIME at beginning of job.
+  precheck_gate_plus_background_watchdog_integration:
+    file: precheck_gate_plus_background_watchdog_integration.inp
+    lines: 52
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: isolated
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Uses pkill patterns matching /opt/orca/orca and orca_ children.
+  hms_string_to_seconds_parser:
+    file: hms_string_to_seconds_parser.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - get_auto3d_calc_status
+    notes: Used to aggregate elapsed time across batches.
+  seconds_to_hms_formatter:
+    file: seconds_to_hms_formatter.sh
+    lines: 14
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - get_auto3d_calc_status
+    notes: Used for reporting total and per-molecule average time.

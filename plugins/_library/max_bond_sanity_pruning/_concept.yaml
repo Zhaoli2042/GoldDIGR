@@ -1,0 +1,25 @@
+name: max_bond_sanity_pruning
+description: Prune overcoordinated atoms by removing the longest inferred bonds until Max_Bonds is satisfied.
+category: science
+interface:
+  inputs:
+  - Adj_mat
+  - Dist_Mat
+  - Elements
+  - Max_Bonds
+  outputs:
+  - pruned Adj_mat
+invariants:
+- Only prune when Max_Bonds[element] is not None and sum(adj_row) exceeds it.
+- Remove bonds in descending distance order (longest first).
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/adjacency.py
+    notes: This block is embedded inside Table_generator; extracted here as the tested logic.

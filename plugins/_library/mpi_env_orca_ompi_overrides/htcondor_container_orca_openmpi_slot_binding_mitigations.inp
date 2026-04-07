@@ -1,0 +1,12 @@
+# ── SNIPPET: mpi_env_orca_ompi_overrides/htcondor_container_orca_openmpi_slot_binding_mitigations ─
+# Scheduler:   any
+# Tool:        orca
+# Tested:      dft_energy_orca_multiwfn
+# Notes: Assumes container layout /opt/orca and OpenMPI inside container.
+# ────────────────────────────────────────────────────────────
+
+export PATH="/opt/orca:${PATH}"
+export LD_LIBRARY_PATH="/opt/orca:${LD_LIBRARY_PATH}"
+
+export OMPI_MCA_rmaps_base_oversubscribe=1
+export OMPI_MCA_hwloc_base_binding_policy=none

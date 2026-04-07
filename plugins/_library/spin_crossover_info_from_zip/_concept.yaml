@@ -1,0 +1,24 @@
+name: spin_crossover_info_from_zip
+description: Extract spin crossover frames and per-frame best_UHF transitions from xTB-scan members inside a zip.
+category: monitoring
+interface:
+  inputs:
+  - zipfile_handle
+  - namelist
+  outputs:
+  - dict_or_None
+invariants:
+- spin_crossover_frames.txt is the presence marker; without it returns None.
+- Frames are parsed as ints from whitespace/comma separated tokens and deduplicated/sorted.
+- If spin_scan_summary.csv is missing or lacks required columns, still returns frames with empty events.
+variants:
+  xTB-wbo-scan-Slurm_default:
+    file: xTB-wbo-scan-Slurm_default.sh
+    lines: 69
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Multiplicity is reported as best_UHF+1.

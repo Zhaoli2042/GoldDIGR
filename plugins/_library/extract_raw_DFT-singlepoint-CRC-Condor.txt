@@ -1,0 +1,1285 @@
+=== CONCEPT: incremental_input_ingest_from_archives ===
+Description: Idempotently extract new .tar.gz inputs into inputs/ and append only previously-untracked .zip jobs into file_list.txt.
+Category: adapters
+Invariants:
+  - "Never re-add a .zip already tracked: compute set-difference between on-disk zips and file_list.txt using sorted absolute paths + comm."
+  - "Preserve nested directory structure under inputs/ when extracting tarballs."
+  - "file_list.txt format must remain: 'zip_abspath, zip_relpath_no_ext' (comma+space delimiter)."
+Interface_inputs: {{INPUT_TARBALLS_OR_ARGS}}, {{INPUTS_DIR}}, {{FILE_LIST}}
+Interface_outputs: Appended file_list.txt entries for new zips; temp files removed; NEW_COUNT printed
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From add_data.sh steps 1–3; safe to run multiple times.
+
+```bash
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+INPUTS_DIR="{{INPUTS_DIR:-inputs}}"
+FILE_LIST="{{FILE_LIST:-file_list.txt}}"
+
+# Determine tarballs to process
+if [ $# -gt 0 ]; then
+  INPUT_TARBALLS="$@"
+else
+  INPUT_TARBALLS=$(ls *.tar.gz 2>/dev/null | grep -v 'results_package' | grep -v 'backup_' || true)
+fi
+
+if [ -z "$INPUT_TARBALLS" ]; then
+  echo "Error: No *.tar.gz files found."
+  exit 1
+fi
+
+# Preflight
+if [ ! -f "$FILE_LIST" ]; then
+  echo "Error: $FILE_LIST not found. Initialize workflow first."
+  exit 1
+fi
+if [ ! -d "$INPUTS_DIR" ] || [ ! -d "results" ]; then
+  echo "Error: inputs/ or results/ directory missing. Initialize workflow first."
+  exit 1
+fi
+
+# Step 1: Extract archives into inputs/
+for TARBALL in $INPUT_TARBALLS; do
+  if [ ! -f "$TARBALL" ]; then
+    echo "Warning: $TARBALL not found, skipping"
+    continue
+  fi
+  tar -xzf "$TARBALL" -C "$INPUTS_DIR"/
+done
+
+# Step 2: Find NEW zip files not already tracked
+INPUTS_ABS="$(cd "$INPUTS_DIR" && pwd)"
+
+ALL_ZIPS_FILE=".all_zips_$$.txt"
+find "$INPUTS_ABS" -name "*.zip" -type f | sort > "$ALL_ZIPS_FILE"
+
+TRACKED_ZIPS_FILE=".tracked_zips_$$.txt"
+awk -F', ' '{print $1}' "$FILE_LIST" | sort > "$TRACKED_ZIPS_FILE"
+
+NEW_ZIPS_FILE=".new_zips_$$.txt"
+comm -23 "$ALL_ZIPS_FILE" "$TRACKED_ZIPS_FILE" > "$NEW_ZIPS_FILE"
+
+rm -f "$ALL_ZIPS_FILE" "$TRACKED_ZIPS_FILE"
+
+NEW_COUNT=$(wc -l < "$NEW_ZIPS_FILE")
+if [ "$NEW_COUNT" -eq 0 ]; then
+  echo "No new .zip files found; all zips already tracked."
+  rm -f "$NEW_ZIPS_FILE"
+  exit 0
+fi
+
+# Convert new zip paths to file_list format: "abspath, relpath_no_ext"
+NEW_LIST_FILE=".new_entries_$$.txt"
+while IFS= read -r zipfile; do
+  relpath="${zipfile#$INPUTS_ABS/}"
+  relpath_no_ext="${relpath%.zip}"
+  echo "$zipfile, $relpath_no_ext"
+done < "$NEW_ZIPS_FILE" > "$NEW_LIST_FILE"
+rm -f "$NEW_ZIPS_FILE"
+
+# Step 3: Append and mirror directories
+cat "$NEW_LIST_FILE" >> "$FILE_LIST"
+(cd "$INPUTS_DIR" && find . -type d -exec mkdir -p "../results/{}" \;)
+
+rm -f "$NEW_LIST_FILE"
+
+echo "Appended $NEW_COUNT new entries to $FILE_LIST"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: directory_mirroring_results_tree ===
+Description: Mirror inputs/ nested directory structure under results/ so remapped outputs land in existing directories.
+Category: adapters
+Invariants:
+  - "Mirror directories (not files) to preserve nested structure."
+  - "Run from workflow root where inputs/ and results/ are siblings."
+Interface_inputs: {{INPUTS_DIR}}, {{RESULTS_DIR}}
+Interface_outputs: results/ directory tree created to match inputs/
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: Used in start.sh and add_data.sh.
+
+```bash
+#!/bin/bash
+set -e
+INPUTS_DIR="{{INPUTS_DIR:-inputs}}"
+RESULTS_DIR="{{RESULTS_DIR:-results}}"
+
+[ -d "$INPUTS_DIR" ] || { echo "Missing $INPUTS_DIR"; exit 1; }
+mkdir -p "$RESULTS_DIR"
+
+(cd "$INPUTS_DIR" && find . -type d -exec mkdir -p "../$RESULTS_DIR/{}" \;)
+echo "Mirrored $INPUTS_DIR/ -> $RESULTS_DIR/"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: chunked_job_list_continuous_numbering ===
+Description: Split new entries into job_N.txt chunks continuing numbering across pending and submitted batches.
+Category: scheduler
+Invariants:
+  - "Chunk numbering must not collide with existing job_*.txt in either root or submitted_batches/."
+  - "Chunk size fixed by JOBS_PER_CHUNK; preserve line order."
+Interface_inputs: {{NEW_ENTRIES_FILE}}, {{JOBS_PER_CHUNK}}, {{SUBMITTED_DIR}}
+Interface_outputs: New job_*.txt files created; prints range created
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From add_data.sh step 4.
+
+```bash
+#!/bin/bash
+set -e
+
+JOBS_PER_CHUNK={{JOBS_PER_CHUNK:-1000}}
+SUBMITTED_DIR="{{SUBMITTED_DIR:-submitted_batches}}"
+NEW_ENTRIES_FILE="{{NEW_ENTRIES_FILE}}"
+
+[ -f "$NEW_ENTRIES_FILE" ] || { echo "Missing NEW_ENTRIES_FILE=$NEW_ENTRIES_FILE"; exit 1; }
+mkdir -p "$SUBMITTED_DIR"
+
+MAX_NUM=0
+ALL_JOB_FILES=$(ls job_*.txt "$SUBMITTED_DIR"/job_*.txt 2>/dev/null || true)
+for f in $ALL_JOB_FILES; do
+  [ -f "$f" ] || continue
+  num=$(basename "$f" | sed -n 's/^job_\([0-9]\+\)\.txt$/\1/p')
+  if [ -n "$num" ] && [ "$num" -gt "$MAX_NUM" ]; then
+    MAX_NUM=$num
+  fi
+done
+
+NEXT_NUM=$((MAX_NUM + 1))
+CHUNK_NUM=$((NEXT_NUM - 1))
+LINE_NUM=0
+CHUNKS_CREATED=0
+
+while IFS= read -r line || [ -n "$line" ]; do
+  if [ $((LINE_NUM % JOBS_PER_CHUNK)) -eq 0 ]; then
+    CHUNK_NUM=$((CHUNK_NUM + 1))
+    CHUNK_FILE="job_${CHUNK_NUM}.txt"
+    > "$CHUNK_FILE"
+    CHUNKS_CREATED=$((CHUNKS_CREATED + 1))
+  fi
+  echo "$line" >> "$CHUNK_FILE"
+  LINE_NUM=$((LINE_NUM + 1))
+done < "$NEW_ENTRIES_FILE"
+
+echo "Created $CHUNKS_CREATED chunk(s): job_${NEXT_NUM}.txt → job_${CHUNK_NUM}.txt"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: tmux_restart_submit_monitor_only ===
+Description: Restart only the submit monitor tmux session so it picks up new job chunks while other monitors keep running.
+Category: monitoring
+Invariants:
+  - "Only kill/restart 'submit' session; do not touch 'health' or 'backup'."
+  - "Start submit monitor in workflow directory so relative paths work."
+Interface_inputs: {{SCRIPT_DIR}}, {{SUBMIT_CMD}}
+Interface_outputs: tmux session 'submit' running
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From add_data.sh step 5.
+
+```bash
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="{{SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}}"
+SUBMIT_CMD="{{SUBMIT_CMD:-./monitor_submit.sh}}"
+
+command -v tmux >/dev/null 2>&1 || { echo "tmux not available"; exit 1; }
+
+if tmux has-session -t submit 2>/dev/null; then
+  tmux kill-session -t submit 2>/dev/null || true
+  sleep 2
+fi
+
+tmux new-session -d -s submit "cd $SCRIPT_DIR && $SUBMIT_CMD"
+echo "Started tmux session: submit"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: bulk_config_patch_with_sed ===
+Description: Idempotent in-place edits across workflow files to change ORCA maxcore, HTCondor request_memory, and health escalation ladder.
+Category: monitoring
+Invariants:
+  - "Edits must be safe to re-run (detect already-updated values)."
+  - "RESOURCE_LEVELS block replacement must match the script’s existing block boundaries."
+Interface_inputs: {{RUN_ORCA_SCRIPT}}, {{SUBMIT_FILE}}, {{HEALTH_MONITOR}}
+Interface_outputs: Updated files on disk; nonzero ERRORS count if unexpected patterns
+Scheduler: htcondor
+Tool: orca
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From apply_memory_fix.sh steps 1–3 (as-is; includes warnings when patterns don’t match).
+
+```bash
+#!/bin/bash
+set -e
+
+RUN_ORCA_SCRIPT="{{RUN_ORCA_SCRIPT:-run_orca_wbo.sh}}"
+SUBMIT_FILE="{{SUBMIT_FILE:-batch_job.submit}}"
+HEALTH_MONITOR="{{HEALTH_MONITOR:-monitor_health.sh}}"
+
+ERRORS=0
+
+# Step 1: %maxcore 2500 -> 1000
+if [ ! -f "$RUN_ORCA_SCRIPT" ]; then
+  echo "Error: $RUN_ORCA_SCRIPT not found"
+  ERRORS=$((ERRORS + 1))
+else
+  if grep -q '%maxcore 2500' "$RUN_ORCA_SCRIPT"; then
+    sed -i 's/%maxcore 2500/%maxcore 1000/g' "$RUN_ORCA_SCRIPT"
+  elif grep -q '%maxcore 1000' "$RUN_ORCA_SCRIPT"; then
+    :
+  else
+    echo "Warning: Could not find %maxcore line"
+    ERRORS=$((ERRORS + 1))
+  fi
+fi
+
+# Step 2: request_memory 12 GB -> 6 GB
+if [ ! -f "$SUBMIT_FILE" ]; then
+  echo "Error: $SUBMIT_FILE not found"
+  ERRORS=$((ERRORS + 1))
+else
+  if grep -q 'request_memory = 12 GB' "$SUBMIT_FILE"; then
+    sed -i 's/request_memory = 12 GB/request_memory = 6 GB/g' "$SUBMIT_FILE"
+  elif grep -q 'request_memory = 6 GB' "$SUBMIT_FILE"; then
+    :
+  else
+    echo "Warning: Unexpected request_memory value"
+    grep 'request_memory' "$SUBMIT_FILE" 2>/dev/null || true
+    ERRORS=$((ERRORS + 1))
+  fi
+fi
+
+# Step 3: Replace RESOURCE_LEVELS block
+if [ ! -f "$HEALTH_MONITOR" ]; then
+  echo "Error: $HEALTH_MONITOR not found"
+  ERRORS=$((ERRORS + 1))
+else
+  if grep -q '"12288:4"' "$HEALTH_MONITOR" || grep -q '"16384:4"' "$HEALTH_MONITOR"; then
+    sed -i '/^RESOURCE_LEVELS=(/,/^)/c\
+RESOURCE_LEVELS=(\
+    "6144:4"     # Level 0: 6 GB, 4 CPUs  (default)\
+    "12288:6"    # Level 1: 12 GB, 6 CPUs\
+    "20480:8"    # Level 2: 20 GB, 8 CPUs\
+    "32768:10"   # Level 3: 32 GB, 10 CPUs (MAX)\
+)' "$HEALTH_MONITOR"
+  elif grep -q '"6144:4"' "$HEALTH_MONITOR"; then
+    :
+  else
+    echo "Warning: Could not find resource levels block"
+    ERRORS=$((ERRORS + 1))
+  fi
+
+  sed -i 's/Level 0: 12 GB/Level 0: 6 GB/g; s/Level 0: 16 GB/Level 0: 6 GB/g' "$HEALTH_MONITOR"
+  sed -i 's/Level 1: 20 GB/Level 1: 12 GB/g; s/Level 1: 24 GB/Level 1: 12 GB/g' "$HEALTH_MONITOR"
+  sed -i 's/Level 2: 32 GB/Level 2: 20 GB/g' "$HEALTH_MONITOR"
+  sed -i 's/Level 3: 40 GB/Level 3: 32 GB/g' "$HEALTH_MONITOR"
+  sed -i 's/L0: [0-9]*GB:[0-9]* .* L1: [0-9]*GB:[0-9]* .* L2: [0-9]*GB:[0-9]* .* L3: [0-9]*GB:[0-9]* (MAX)/L0: 6GB:4  →  L1: 12GB:6  →  L2: 20GB:8  →  L3: 32GB:10 (MAX)/g' "$HEALTH_MONITOR"
+fi
+
+echo "ERRORS=$ERRORS"
+exit 0
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: htcondor_qedit_lower_idle_memory ===
+Description: Lower RequestMemory for all IDLE HTCondor jobs for a user via constraint-based condor_qedit.
+Category: scheduler
+Invariants:
+  - "Only edit IDLE jobs (JobStatus==1); leave running jobs untouched."
+  - "Use Owner constraint to avoid editing other users."
+Interface_inputs: {{USER_ID}}, {{NEW_MEMORY_MB}}
+Interface_outputs: Updated job ClassAds for idle jobs
+Scheduler: htcondor
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From apply_memory_fix.sh step 4.
+
+```bash
+#!/bin/bash
+set -e
+
+USER_ID="{{USER_ID:-$USER}}"
+NEW_MEMORY_MB="{{NEW_MEMORY_MB:-6144}}"
+
+command -v condor_q >/dev/null 2>&1 || { echo "condor_q not available"; exit 0; }
+
+IDLE_COUNT=$(condor_q "$USER_ID" -constraint 'JobStatus == 1' -af ClusterId 2>/dev/null | wc -l)
+RUNNING_COUNT=$(condor_q "$USER_ID" -constraint 'JobStatus == 2' -af ClusterId 2>/dev/null | wc -l)
+
+echo "Idle jobs:    $IDLE_COUNT"
+echo "Running jobs: $RUNNING_COUNT"
+
+if [ "$IDLE_COUNT" -gt 0 ]; then
+  condor_qedit -constraint "Owner == \"$USER_ID\" && JobStatus == 1" RequestMemory "$NEW_MEMORY_MB" 2>/dev/null
+  echo "Updated $IDLE_COUNT idle jobs to ${NEW_MEMORY_MB} MB"
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: tmux_restart_health_monitor ===
+Description: Restart the health monitor tmux session after policy changes.
+Category: monitoring
+Invariants:
+  - "Kill existing 'health' session if present, then start a new one in workflow directory."
+Interface_inputs: {{SCRIPT_DIR}}, {{HEALTH_CMD}}
+Interface_outputs: tmux session 'health' running
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From apply_memory_fix.sh step 5.
+
+```bash
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="{{SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}}"
+HEALTH_CMD="{{HEALTH_CMD:-./monitor_health.sh}}"
+
+command -v tmux >/dev/null 2>&1 || { echo "tmux not available"; exit 1; }
+
+if tmux has-session -t health 2>/dev/null; then
+  tmux kill-session -t health 2>/dev/null || true
+  sleep 1
+fi
+
+tmux new-session -d -s health "cd $SCRIPT_DIR && $HEALTH_CMD"
+echo "Health monitor restarted"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: verified_archival_with_manifest_and_atomic_rename ===
+Description: Create verified tar.gz backups with manifests; delete originals only after verification and atomic rename.
+Category: monitoring
+Invariants:
+  - "Write manifest first with IN_PROGRESS; only mark COMPLETE after archive verified and originals deleted."
+  - "Create archive as .tmp then mv to final name (atomic)."
+  - "Never delete originals unless tar -tzf verification succeeds."
+Interface_inputs: {{RESULTS_DIR}}, {{DEST_DIR}}, {{MANIFEST_DIR}}, {{FILE_LIST_ABS_NEWLINE}}
+Interface_outputs: backup_*.tar.gz in DEST_DIR; manifest_*.txt in MANIFEST_DIR; originals removed
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: Extracted from backup_results.sh create_backup().
+
+```bash
+#!/bin/bash
+set -e
+
+RESULTS_DIR="{{RESULTS_DIR}}"
+DEST_DIR="{{DEST_DIR}}"
+MANIFEST_DIR="{{MANIFEST_DIR:-.backup_manifests}}"
+FILE_LIST_ABS_NEWLINE="{{FILE_LIST_ABS_NEWLINE}}"
+
+mkdir -p "$DEST_DIR" "$MANIFEST_DIR"
+
+file_count=$(echo "$FILE_LIST_ABS_NEWLINE" | grep -c . || true)
+timestamp=$(date '+%Y%m%d_%H%M%S')
+backup_name="backup_${timestamp}_n${file_count}.tar.gz"
+backup_tmp="$DEST_DIR/${backup_name}.tmp"
+backup_final="$DEST_DIR/${backup_name}"
+manifest_file="$MANIFEST_DIR/manifest_${timestamp}.txt"
+
+echo "# Backup manifest: $backup_name" > "$manifest_file"
+echo "# Created: $(date)" >> "$manifest_file"
+echo "# Status: IN_PROGRESS" >> "$manifest_file"
+echo "# Destination: $backup_final" >> "$manifest_file"
+echo "# Files:" >> "$manifest_file"
+echo "$FILE_LIST_ABS_NEWLINE" >> "$manifest_file"
+
+# Create tar.gz preserving structure relative to RESULTS_DIR
+if ! echo "$FILE_LIST_ABS_NEWLINE" | tar -czf "$backup_tmp" -C "$RESULTS_DIR" --files-from=<(
+  echo "$FILE_LIST_ABS_NEWLINE" | while IFS= read -r f; do
+    echo "${f#$RESULTS_DIR/}"
+  done
+) 2>/dev/null; then
+  echo "# Status: FAILED_CREATE" >> "$manifest_file"
+  rm -f "$backup_tmp"
+  exit 1
+fi
+
+# Verify
+if ! tar -tzf "$backup_tmp" >/dev/null 2>&1; then
+  echo "# Status: FAILED_VERIFY" >> "$manifest_file"
+  rm -f "$backup_tmp"
+  exit 1
+fi
+
+# Atomic rename
+mv "$backup_tmp" "$backup_final"
+
+# Delete originals
+deleted=0
+failed=0
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  if rm -f "$file" 2>/dev/null; then
+    deleted=$((deleted + 1))
+  else
+    failed=$((failed + 1))
+  fi
+done <<< "$FILE_LIST_ABS_NEWLINE"
+
+find "$RESULTS_DIR" -type d -empty -delete 2>/dev/null || true
+
+sed -i 's/IN_PROGRESS/COMPLETE/' "$manifest_file"
+echo "# Completed: $(date)" >> "$manifest_file"
+echo "# Deleted: $deleted, Failed: $failed" >> "$manifest_file"
+
+echo "Backup complete: $backup_final"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: age_and_quiet_time_eligibility_scan ===
+Description: Select result tarballs eligible for backup based on minimum age and minimum quiet time.
+Category: monitoring
+Invariants:
+  - "Use both MIN_FILE_AGE and MIN_QUIET_TIME to avoid racing with in-progress writes."
+  - "Operate recursively under results/ to support nested structure."
+Interface_inputs: {{RESULTS_DIR}}, {{MIN_FILE_AGE}}, {{MIN_QUIET_TIME}}
+Interface_outputs: Prints eligible absolute file paths (one per line)
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From backup_results.sh find_eligible_files().
+
+```bash
+#!/bin/bash
+set -e
+
+RESULTS_DIR="{{RESULTS_DIR:-results}}"
+MIN_FILE_AGE={{MIN_FILE_AGE:-14400}}
+MIN_QUIET_TIME={{MIN_QUIET_TIME:-600}}
+
+now=$(date +%s)
+min_age_cutoff=$((now - MIN_FILE_AGE))
+quiet_cutoff=$((now - MIN_QUIET_TIME))
+
+find "$RESULTS_DIR" -name "*_results.tar.gz" -type f 2>/dev/null | while read -r file; do
+  mtime=$(stat -c %Y "$file" 2>/dev/null || true)
+  [ -z "$mtime" ] && continue
+  if [ "$mtime" -lt "$min_age_cutoff" ] && [ "$mtime" -lt "$quiet_cutoff" ]; then
+    echo "$file"
+  fi
+done
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: resume_incomplete_backups_from_manifests ===
+Description: Resume or retry backups using manifest status and presence/validity of .tmp archives.
+Category: monitoring
+Invariants:
+  - "If IN_PROGRESS and .tmp exists and tar -tzf succeeds: mv to final and delete originals listed in manifest."
+  - "If FAILED_*: remove manifest to allow clean retry."
+Interface_inputs: {{MANIFEST_DIR}}
+Interface_outputs: Completed archives and updated manifests; corrupt tmp removed
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From backup_results.sh resume_incomplete().
+
+```bash
+#!/bin/bash
+set -e
+
+MANIFEST_DIR="{{MANIFEST_DIR:-.backup_manifests}}"
+
+incomplete=$(grep -l "IN_PROGRESS\|FAILED" "$MANIFEST_DIR"/manifest_*.txt 2>/dev/null || true)
+[ -z "$incomplete" ] && exit 0
+
+for manifest in $incomplete; do
+  dest=$(grep "^# Destination:" "$manifest" | cut -d' ' -f3)
+  tmp_file="${dest}.tmp"
+  status=$(grep "^# Status:" "$manifest" | tail -1 | cut -d' ' -f3)
+
+  case "$status" in
+    IN_PROGRESS)
+      if [ -f "$tmp_file" ]; then
+        if tar -tzf "$tmp_file" > /dev/null 2>&1; then
+          if mv "$tmp_file" "$dest"; then
+            grep -v "^#" "$manifest" | while read -r file; do
+              [ -f "$file" ] && rm -f "$file"
+            done
+            sed -i 's/IN_PROGRESS/COMPLETE/' "$manifest"
+          fi
+        else
+          rm -f "$tmp_file"
+        fi
+      fi
+      ;;
+    FAILED_*)
+      rm -f "$manifest"
+      ;;
+  esac
+done
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: destination_disk_usage_alert ===
+Description: Alert when backup destination filesystem exceeds a usage threshold.
+Category: monitoring
+Invariants:
+  - "Use df on DEST_BASE and compare integer percent to threshold."
+Interface_inputs: {{DEST_BASE}}, {{DISK_ALERT_THRESHOLD}}
+Interface_outputs: Exit code 1 when threshold exceeded; prints usage
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From backup_results.sh check_disk_usage().
+
+```bash
+#!/bin/bash
+set -e
+
+DEST_BASE="{{DEST_BASE}}"
+DISK_ALERT_THRESHOLD={{DISK_ALERT_THRESHOLD:-90}}
+
+if [ ! -d "$DEST_BASE" ]; then
+  echo "Warning: Destination base $DEST_BASE does not exist yet"
+  exit 0
+fi
+
+usage=$(df "$DEST_BASE" 2>/dev/null | tail -1 | awk '{print $5}' | tr -d '%')
+if [ -n "$usage" ] && [ "$usage" -ge "$DISK_ALERT_THRESHOLD" ]; then
+  echo "ALERT: Destination storage is ${usage}% full! (threshold: ${DISK_ALERT_THRESHOLD}%)"
+  exit 1
+fi
+
+echo "Destination disk usage: ${usage}%"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: htcondor_submit_descriptor_queue_from_two_column_csv ===
+Description: HTCondor submit file pattern that queues jobs from a two-column CSV and remaps a returned tarball into a nested shared results tree.
+Category: scheduler
+Invariants:
+  - "Input list lines must be 'zip_abspath, zip_relpath' with comma+space delimiter to match queue statement."
+  - "Job must produce results.tar.gz in the execute directory for transfer_output_files."
+  - "transfer_output_remaps must point to a writable shared filesystem path."
+Interface_inputs: {{SUBMIT_EXECUTABLE}}, {{ZIP_ABSPATH}}, {{ZIP_RELPATH}}, {{INPUT_LIST}}, {{RESULTS_DIR_ABS}}
+Interface_outputs: Per job: results tarball remapped to {{RESULTS_DIR_ABS}}/$(zip_relpath)_results.tar.gz
+Scheduler: htcondor
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: This is the tested file content with placeholders added for reuse.
+
+```condor
+# file: batch_job.submit
+
+executable = {{SUBMIT_EXECUTABLE:-run_wrapper.sh}}
+arguments = $(zip_abspath)
+
+transfer_input_files = run_orca_wbo.sh, run_wrapper.sh, $(zip_abspath)
+
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+
+transfer_output_files = results.tar.gz
+
+transfer_output_remaps = "results.tar.gz = {{RESULTS_DIR_ABS}}/$(zip_relpath)_results.tar.gz"
+
+requirements = (Machine != "")
+request_cpus = {{REQUEST_CPUS:-4}}
+request_memory = {{REQUEST_MEMORY:-4 GB}}
+request_disk = {{REQUEST_DISK:-20 GB}}
+
+output = logs/$(Cluster)_$(Process).out
+error  = logs/$(Cluster)_$(Process).err
+log    = logs/$(Cluster)_$(Process).log
+
+queue zip_abspath, zip_relpath from $(input_list)
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: capacity_aware_staged_submission_monitor ===
+Description: Drip-feed chunk files to HTCondor when queue is below a max job threshold; move submitted chunks to submitted_batches/ for idempotency.
+Category: scheduler
+Invariants:
+  - "Never resubmit a chunk already present in submitted_batches/."
+  - "Gate submission on total job count < MAX_JOBS."
+  - "Submit chunks in numeric order (job_1, job_2, ...)."
+Interface_inputs: {{MAX_JOBS}}, {{CHECK_INTERVAL}}, {{SUBMIT_FILE}}, {{FILE_PATTERN}}
+Interface_outputs: Submitted jobs; chunk files moved to submitted_batches/
+Scheduler: htcondor
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: monitor_submit.sh as-is.
+
+```bash
+#!/bin/bash
+set -e
+
+MAX_JOBS={{MAX_JOBS:-100000}}
+USER_ID="${USER}"
+CHECK_INTERVAL={{CHECK_INTERVAL:-300}}
+SUBMIT_FILE="{{SUBMIT_FILE:-batch_job.submit}}"
+FILE_PATTERN="{{FILE_PATTERN:-job_*.txt}}"
+
+mkdir -p submitted_batches
+
+get_job_count() {
+  local count
+  count=$(condor_q "$USER_ID" 2>/dev/null | grep "Total for query" | awk '{print $4}')
+  if [ -z "$count" ]; then
+    count=$(condor_q "$USER_ID" 2>/dev/null | awk -v user="$USER_ID" '$0 ~ user {sum += $10} END {print sum+0}')
+  fi
+  echo "${count:-0}"
+}
+
+[ -f "$SUBMIT_FILE" ] || { echo "Error: Submit file not found: $SUBMIT_FILE"; exit 1; }
+
+PENDING_FILES=$(ls $FILE_PATTERN 2>/dev/null | wc -l)
+[ "$PENDING_FILES" -gt 0 ] || { echo "Error: No job files found matching $FILE_PATTERN"; exit 1; }
+
+for batch_file in $(ls $FILE_PATTERN 2>/dev/null | sort -t_ -k2 -n); do
+  [ -f "$batch_file" ] || continue
+
+  if [ -f "submitted_batches/$batch_file" ]; then
+    echo "Skipping $batch_file (already submitted)"
+    continue
+  fi
+
+  while true; do
+    current_jobs=$(get_job_count)
+    echo "[$(date '+%H:%M:%S')] Queue: $current_jobs / $MAX_JOBS jobs"
+    if [ "$current_jobs" -lt "$MAX_JOBS" ]; then
+      echo "   -> Queue has capacity. Submitting..."
+      break
+    else
+      echo "   -> Queue full. Waiting $((CHECK_INTERVAL / 60)) minutes..."
+      sleep $CHECK_INTERVAL
+    fi
+  done
+
+  JOB_COUNT=$(wc -l < "$batch_file")
+  echo "Submitting: $batch_file ($JOB_COUNT jobs)"
+  condor_submit "$SUBMIT_FILE" input_list="$batch_file"
+  SUBMIT_EXIT=$?
+
+  if [ $SUBMIT_EXIT -eq 0 ]; then
+    mv "$batch_file" submitted_batches/
+  else
+    echo "Warning: condor_submit returned exit code $SUBMIT_EXIT; will retry"
+    sleep 60
+    continue
+  fi
+
+  sleep 10
+done
+
+echo "All job files submitted!"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: htcondor_health_monitor_autorepair ===
+Description: Auto-heal held HTCondor jobs by HoldReason classification: release transfer holds, escalate memory/CPU via ladder, upgrade disk, log unknown and maxed jobs.
+Category: monitoring
+Invariants:
+  - "Classify holds by regex on HoldReason; only auto-release within defined max resource level."
+  - "Use condor_qedit to change RequestMemory/RequestCpus/RequestDisk, then condor_release."
+  - "Track per-job resource level in a local file to make escalation monotonic across cycles."
+Interface_inputs: {{CHECK_INTERVAL}}, {{RESOURCE_LEVELS}}, {{DISK_UPGRADE_KB}}, {{USER_ID}}
+Interface_outputs: health_monitor.log, held_jobs_unknown.log, held_jobs_maxed.log, resource_tracking.dat; jobs released/edited
+Scheduler: htcondor
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: monitor_health.sh as-is (resource ladder values are part of policy).
+
+```bash
+{{PASTE_FILE: monitor_health.sh WITH {{DOUBLE_BRACE}} PLACEHOLDERS WHERE NEEDED}}
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: container_wrapper_for_condor_apptainer ===
+Description: HTCondor executable wrapper that runs a containerized compute script with bind-mounted working directory.
+Category: compute
+Invariants:
+  - "Bind $PWD:$PWD so transferred inputs/outputs are visible inside container."
+  - "Invoke /bin/bash <compute_script> <zip_arg> inside container."
+Interface_inputs: {{CONTAINER_IMAGE}}, {{ZIP_ABS_PATH}}, {{COMPUTE_SCRIPT}}
+Interface_outputs: Whatever compute script writes (e.g., results.tar.gz)
+Scheduler: htcondor
+Tool: apptainer
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: run_wrapper.sh as-is with placeholders.
+
+```bash
+#!/bin/bash
+
+if [ -r /opt/crc/Modules/current/init/bash ]; then
+    source /opt/crc/Modules/current/init/bash
+fi
+
+CONTAINER_IMAGE="{{CONTAINER_IMAGE}}"
+ZIP_ABS_PATH=$1
+COMPUTE_SCRIPT="{{COMPUTE_SCRIPT:-run_orca_wbo.sh}}"
+
+/usr/bin/apptainer exec --bind $PWD:$PWD "$CONTAINER_IMAGE" /bin/bash "$COMPUTE_SCRIPT" "$ZIP_ABS_PATH"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: charge_multiplicity_from_zip_filename ===
+Description: Extract charge and multiplicity from the last two underscore-delimited fields of a zip basename.
+Category: science
+Invariants:
+  - "Zip naming convention: ..._<charge>_<mult>.zip; charge is $(NF-1), mult is $NF."
+Interface_inputs: {{ZIP_PATH}}
+Interface_outputs: Prints CHARGE and MULT (or exports them)
+Scheduler: any
+Tool: any
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh metadata parsing.
+
+```bash
+#!/bin/bash
+set -e
+
+ZIP_ARGUMENT="{{ZIP_PATH}}"
+ZIP_FILENAME=$(basename "$ZIP_ARGUMENT")
+ZIP_BASENAME=$(basename "$ZIP_FILENAME" .zip)
+
+CHARGE=$(echo "$ZIP_BASENAME" | awk -F_ '{print $(NF-1)}')
+MULT=$(echo "$ZIP_BASENAME" | awk -F_ '{print $NF}')
+
+echo "Charge=$CHARGE"
+echo "Multiplicity=$MULT"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: walltime_watchdog_kill_orca ===
+Description: Background watchdog that kills ORCA processes near wall limit to allow graceful packing of partial results.
+Category: compute
+Invariants:
+  - "Watchdog fires at WALL_SECONDS - WATCHDOG_BUFFER and kills /opt/orca/orca and orca_ MPI children."
+  - "Always stop watchdog on exit via trap."
+Interface_inputs: {{WALL_SECONDS}}, {{WATCHDOG_BUFFER}}
+Interface_outputs: ORCA processes terminated near wall limit
+Scheduler: any
+Tool: orca
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh watchdog section.
+
+```bash
+#!/bin/bash
+set -e
+
+WALL_SECONDS=${WALL_SECONDS:-70200}
+WATCHDOG_BUFFER={{WATCHDOG_BUFFER:-1800}}
+
+WATCHDOG_DELAY=$((WALL_SECONDS - WATCHDOG_BUFFER))
+WATCHDOG_PID=""
+
+start_watchdog() {
+  (
+    sleep "$WATCHDOG_DELAY"
+    pkill -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -f "orca_" 2>/dev/null || true
+    sleep 5
+    pkill -9 -f "/opt/orca/orca" 2>/dev/null || true
+    pkill -9 -f "orca_" 2>/dev/null || true
+  ) &
+  WATCHDOG_PID=$!
+}
+
+stop_watchdog() {
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+  fi
+}
+
+trap 'stop_watchdog' EXIT
+start_watchdog
+
+# ... run compute payload here ...
+wait
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: mpi_oversubscribe_fix_for_opportunistic_nodes ===
+Description: Environment variables to avoid OpenMPI slot/binding errors for containerized ORCA on HTCondor execute nodes.
+Category: compute
+Invariants:
+  - "Set OMPI_MCA_rmaps_base_oversubscribe=1 and OMPI_MCA_hwloc_base_binding_policy=none before launching ORCA."
+Interface_inputs: none
+Interface_outputs: Environment configured
+Scheduler: any
+Tool: orca
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh.
+
+```bash
+export OMPI_MCA_rmaps_base_oversubscribe=1
+export OMPI_MCA_hwloc_base_binding_policy=none
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: orca_input_template_singlepoint_wbo ===
+Description: ORCA input template for wB97X-V/def2-TZVP single-point with RIJCOSX and bond-order-relevant outputs.
+Category: science
+Invariants:
+  - "Keep keywords: wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer."
+  - "Set %pal nproc to match allocated CPUs; set %maxcore to match memory policy."
+  - "Use *xyzfile CHARGE MULT XYZ_FILE."
+Interface_inputs: {{MOL}}, {{CHARGE}}, {{MULT}}, {{XYZ_FILE}}, {{NPROC}}, {{MAXCORE}}
+Interface_outputs: Writes {{MOL}}.inp
+Scheduler: any
+Tool: orca
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh.
+
+```bash
+cat > "{{MOL}}.inp" <<EOF
+! wB97X-V def2-TZVP def2/J defgrid3 RIJCOSX CHELPG Loewdin Mayer
+%scf
+  MaxIter 500
+end
+%pal
+  nproc {{NPROC:-4}}
+end
+%maxcore {{MAXCORE:-1000}}
+%base "{{MOL}}"
+*xyzfile {{CHARGE}} {{MULT}} {{XYZ_FILE}}
+EOF
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: multiwfn_bond_order_automation ===
+Description: Run Multiwfn_noGUI non-interactively to compute Mayer, Wiberg (Lowdin), and Fuzzy bond order matrices from ORCA Molden output.
+Category: science
+Invariants:
+  - "Run orca_2mkl to produce {{MOL}}.molden.input before Multiwfn."
+  - "Multiwfn menu scripts must match version behavior: 9->(1/3/7)->y->0->q."
+  - "Multiwfn writes bndmat.txt; rename immediately per method to avoid overwrite."
+Interface_inputs: {{MOL}}
+Interface_outputs: {{MOL}}_{mayer,wiberg,fuzzy}_mat.txt and *_log.out
+Scheduler: any
+Tool: multiwfn
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh.
+
+```bash
+#!/bin/bash
+set -e
+
+MOL="{{MOL}}"
+
+# Convert to Molden
+/opt/orca/orca_2mkl "${MOL}" -molden > /dev/null 2>&1
+
+if [ -f "${MOL}.molden.input" ]; then
+  # Mayer
+  cat > run_mayer.txt <<EOF
+9
+1
+y
+0
+q
+EOF
+  /opt/Multiwfn_bin/Multiwfn_noGUI "${MOL}.molden.input" < run_mayer.txt > "${MOL}_mayer_log.out" 2>/dev/null
+  [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_mayer_mat.txt"
+
+  # Wiberg (Lowdin)
+  cat > run_wiberg.txt <<EOF
+9
+3
+y
+0
+q
+EOF
+  /opt/Multiwfn_bin/Multiwfn_noGUI "${MOL}.molden.input" < run_wiberg.txt > "${MOL}_wiberg_log.out" 2>/dev/null
+  [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_wiberg_mat.txt"
+
+  # Fuzzy
+  cat > run_fuzzy.txt <<EOF
+9
+7
+y
+0
+q
+EOF
+  /opt/Multiwfn_bin/Multiwfn_noGUI "${MOL}.molden.input" < run_fuzzy.txt > "${MOL}_fuzzy_log.out" 2>/dev/null
+  [ -f bndmat.txt ] && mv bndmat.txt "${MOL}_fuzzy_mat.txt"
+
+  rm -f run_mayer.txt run_wiberg.txt run_fuzzy.txt
+else
+  echo "Warning: Molden conversion failed"
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: round2_skip_list_reader ===
+Description: Read skip.txt and mark molecules as complete_previous_round to avoid recomputation in round-2.
+Category: science
+Invariants:
+  - "Trim whitespace; ignore empty lines."
+  - "Use associative array membership test for fast skip checks."
+Interface_inputs: {{SKIP_FILE}}
+Interface_outputs: SKIP_MOLECULES associative array populated
+Scheduler: any
+Tool: any
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh.
+
+```bash
+#!/bin/bash
+set -e
+
+SKIP_FILE="{{SKIP_FILE:-skip.txt}}"
+declare -A SKIP_MOLECULES
+
+if [ -f "$SKIP_FILE" ]; then
+  while IFS= read -r mol_name || [ -n "$mol_name" ]; do
+    mol_name=$(echo "$mol_name" | xargs)
+    [ -z "$mol_name" ] && continue
+    SKIP_MOLECULES["$mol_name"]=1
+  done < "$SKIP_FILE"
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: status_json_for_partial_resubmission ===
+Description: Write status.json capturing per-molecule completion/timeout/missing states and overall status for round-2 detection.
+Category: science
+Invariants:
+  - "Overall status is 'partial' if any TIMEOUT_COUNT>0; 'all_molecules_missing' if none processed and none complete."
+  - "Include zip_file, charge, multiplicity, wall_limit_seconds, elapsed_seconds, and per-molecule map."
+Interface_inputs: {{ZIP_FILENAME}}, {{CHARGE}}, {{MULT}}, {{WALL_SECONDS}}, {{TOTAL_ELAPSED}}, {{MOLECULES[]}}, {{MOL_STATUS_MAP}}
+Interface_outputs: status.json
+Scheduler: any
+Tool: any
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh section 5 (logic preserved).
+
+```bash
+#!/bin/bash
+set -e
+
+ZIP_FILENAME="{{ZIP_FILENAME}}"
+CHARGE="{{CHARGE}}"
+MULT="{{MULT}}"
+WALL_SECONDS={{WALL_SECONDS:-70200}}
+TOTAL_ELAPSED={{TOTAL_ELAPSED}}
+TOTAL_MOLS={{TOTAL_MOLS}}
+COMPLETE_COUNT={{COMPLETE_COUNT}}
+TIMEOUT_COUNT={{TIMEOUT_COUNT}}
+MISSING_COUNT={{MISSING_COUNT}}
+
+# MOLECULES and MOL_STATUS assumed defined in caller shell
+
+cat > status.json <<STATUSEOF
+{
+  "zip_file": "$ZIP_FILENAME",
+  "charge": "$CHARGE",
+  "multiplicity": "$MULT",
+  "status": "{{OVERALL_STATUS}}",
+  "wall_limit_seconds": $WALL_SECONDS,
+  "elapsed_seconds": $TOTAL_ELAPSED,
+  "total_molecules": $TOTAL_MOLS,
+  "completed": $COMPLETE_COUNT,
+  "timeout_skipped": $TIMEOUT_COUNT,
+  "missing": $MISSING_COUNT,
+  "molecules": {
+STATUSEOF
+
+FIRST=1
+for MOL in "${MOLECULES[@]}"; do
+  if [ $FIRST -eq 1 ]; then FIRST=0; else echo "," >> status.json; fi
+  echo -n "    \"$MOL\": \"${MOL_STATUS[$MOL]:-unknown}\"" >> status.json
+done
+
+cat >> status.json <<STATUSEOF
+
+  }
+}
+STATUSEOF
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: results_packaging_selected_outputs ===
+Description: Pack selected outputs into results.tar.gz; emit minimal tarball if all molecules missing.
+Category: adapters
+Invariants:
+  - "Use find -print0 + tar --null -T - to safely handle filenames."
+  - "Always include status.json."
+Interface_inputs: {{OVERALL_STATUS}}, {{PROCESSED_COUNT}}
+Interface_outputs: results.tar.gz
+Scheduler: any
+Tool: any
+Infrastructure: any
+Tested_by: golddigr
+Notes: From run_orca_wbo.sh section 6.
+
+```bash
+#!/bin/bash
+set -e
+
+OVERALL_STATUS="{{OVERALL_STATUS}}"
+PROCESSED_COUNT={{PROCESSED_COUNT:-0}}
+
+if [ "$OVERALL_STATUS" = "all_molecules_missing" ] && [ "$PROCESSED_COUNT" -eq 0 ]; then
+  tar -czf results.tar.gz status.json
+else
+  find . -maxdepth 1 \( \
+    -name "*.out" -o -name "*.xyz" -o -name "*.inp" -o \
+    -name "*_mat.txt" -o -name "*_log.out" -o \
+    -name "status.json" \
+  \) -print0 | tar -czf results.tar.gz --null -T -
+fi
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: round2_partial_detection_via_status_json_in_tarballs ===
+Description: Scan result tarballs (and optionally backup archives) for status.json with "status":"partial".
+Category: monitoring
+Invariants:
+  - "Extract only status.json (wildcards) to avoid full untar cost when possible."
+  - "Treat both direct *_results.tar.gz and nested ones inside backup_*.tar.gz."
+Interface_inputs: {{SCAN_DIRS[]}}, {{WORK_TMP}}
+Interface_outputs: partial_jobs.txt listing result_tarball paths that are partial
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From prepare_round2.sh step 1 (logic preserved; heavy but tested).
+
+```bash
+#!/bin/bash
+set -e
+
+WORK_TMP="{{WORK_TMP:-.round2_tmp_$$}}"
+mkdir -p "$WORK_TMP"
+trap "rm -rf '$WORK_TMP'" EXIT
+
+PARTIAL_LIST="$WORK_TMP/partial_jobs.txt"
+> "$PARTIAL_LIST"
+
+TOTAL_SCANNED=0
+PARTIAL_COUNT=0
+
+for SCAN_DIR in {{SCAN_DIRS}}; do
+  while IFS= read -r result_tarball; do
+    [ -f "$result_tarball" ] || continue
+    TOTAL_SCANNED=$((TOTAL_SCANNED + 1))
+    EXTRACT_DIR="$WORK_TMP/check_$TOTAL_SCANNED"
+    mkdir -p "$EXTRACT_DIR"
+
+    if tar -xzf "$result_tarball" -C "$EXTRACT_DIR" --wildcards '*/status.json' 'status.json' 2>/dev/null || \
+       tar -xzf "$result_tarball" -C "$EXTRACT_DIR" status.json 2>/dev/null; then
+      STATUS_FILE=$(find "$EXTRACT_DIR" -name "status.json" -type f | head -1)
+      if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
+        STATUS=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATUS_FILE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+        if [ "$STATUS" = "partial" ]; then
+          PARTIAL_COUNT=$((PARTIAL_COUNT + 1))
+          echo "$result_tarball $STATUS_FILE" >> "$PARTIAL_LIST"
+        fi
+      fi
+    fi
+    rm -rf "$EXTRACT_DIR"
+  done < <(find "$SCAN_DIR" -name "*_results.tar.gz" -type f 2>/dev/null)
+
+  while IFS= read -r backup_archive; do
+    [ -f "$backup_archive" ] || continue
+    INNER_RESULTS=$(tar -tzf "$backup_archive" 2>/dev/null | grep "_results\.tar\.gz$" || true)
+    [ -z "$INNER_RESULTS" ] && continue
+
+    BACKUP_EXTRACT="$WORK_TMP/backup_extract_$$"
+    mkdir -p "$BACKUP_EXTRACT"
+    tar -xzf "$backup_archive" -C "$BACKUP_EXTRACT" 2>/dev/null || continue
+
+    while IFS= read -r inner_result; do
+      [ -z "$inner_result" ] && continue
+      INNER_PATH="$BACKUP_EXTRACT/$inner_result"
+      [ -f "$INNER_PATH" ] || continue
+
+      TOTAL_SCANNED=$((TOTAL_SCANNED + 1))
+      EXTRACT_DIR="$WORK_TMP/check_inner_$TOTAL_SCANNED"
+      mkdir -p "$EXTRACT_DIR"
+
+      if tar -xzf "$INNER_PATH" -C "$EXTRACT_DIR" --wildcards '*/status.json' 'status.json' 2>/dev/null || \
+         tar -xzf "$INNER_PATH" -C "$EXTRACT_DIR" status.json 2>/dev/null; then
+        STATUS_FILE=$(find "$EXTRACT_DIR" -name "status.json" -type f | head -1)
+        if [ -n "$STATUS_FILE" ] && [ -f "$STATUS_FILE" ]; then
+          STATUS=$(grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATUS_FILE" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+          if [ "$STATUS" = "partial" ]; then
+            PARTIAL_COUNT=$((PARTIAL_COUNT + 1))
+            echo "$INNER_PATH $STATUS_FILE" >> "$PARTIAL_LIST"
+          fi
+        fi
+      fi
+
+      rm -rf "$EXTRACT_DIR"
+    done <<< "$INNER_RESULTS"
+
+    rm -rf "$BACKUP_EXTRACT"
+  done < <(find "$SCAN_DIR" -name "backup_*.tar.gz" -type f 2>/dev/null)
+done
+
+echo "Scanned: $TOTAL_SCANNED; Partial: $PARTIAL_COUNT"
+echo "Wrote: $PARTIAL_LIST"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: round2_zip_builder_with_carry_forward_and_skip_txt ===
+Description: Build round-2 input zips by combining original .xyz inputs for unfinished molecules with carried-forward completed outputs and a skip.txt.
+Category: adapters
+Invariants:
+  - "Carry forward completed outputs so final results.tar.gz is self-contained after round-2."
+  - "skip.txt lists completed molecule keys; run script must honor it."
+  - "Preserve original nested directory structure under round2_inputs/."
+Interface_inputs: {{RESULT_TARBALL}}, {{INPUTS_ABS}}, {{ROUND2_DIR}}, {{WORK_TMP}}
+Interface_outputs: round2_inputs/.../*.zip and file_list_round2.txt entries
+Scheduler: any
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: From prepare_round2.sh step 2 (core logic).
+
+```bash
+#!/bin/bash
+set -e
+
+RESULT_TARBALL="{{RESULT_TARBALL}}"
+INPUTS_ABS="{{INPUTS_ABS}}"
+ROUND2_DIR="{{ROUND2_DIR:-round2_inputs}}"
+WORK_TMP="{{WORK_TMP:-.round2_tmp_$$}}"
+
+mkdir -p "$ROUND2_DIR" "$WORK_TMP"
+R2_WORK="$WORK_TMP/r2_build_$$"
+mkdir -p "$R2_WORK/result_contents"
+
+tar -xzf "$RESULT_TARBALL" -C "$R2_WORK/result_contents" 2>/dev/null
+
+STATUS_FILE=$(find "$R2_WORK/result_contents" -name "status.json" -type f | head -1)
+[ -f "$STATUS_FILE" ] || exit 0
+
+ZIP_NAME=$(grep -o '"zip_file"[[:space:]]*:[[:space:]]*"[^"]*"' "$STATUS_FILE" | sed 's/.*"\([^"]*\)"$/\1/')
+[ -n "$ZIP_NAME" ] || exit 0
+
+COMPLETED_MOLS=()
+INCOMPLETE_MOLS=()
+for mol in "finished_last" "finished_last_opt" "ts_final_geometry" "finished_first" "finished_first_opt" "input"; do
+  mol_status=$(grep -o "\"$mol\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$STATUS_FILE" | sed 's/.*"\([^"]*\)"$/\1/')
+  if [ "$mol_status" = "complete" ] || [ "$mol_status" = "complete_previous_round" ]; then
+    COMPLETED_MOLS+=("$mol")
+  elif [ "$mol_status" = "timeout_skipped" ] || [ "$mol_status" = "timeout_killed" ]; then
+    INCOMPLETE_MOLS+=("$mol")
+  fi
+done
+[ ${#INCOMPLETE_MOLS[@]} -gt 0 ] || exit 0
+
+ORIGINAL_ZIP=$(find "$INPUTS_ABS" -name "$ZIP_NAME" -type f | head -1)
+[ -f "$ORIGINAL_ZIP" ] || exit 0
+
+R2_BUILD="$R2_WORK/build"
+mkdir -p "$R2_BUILD"
+
+unzip -q -j "$ORIGINAL_ZIP" -d "$R2_BUILD"
+
+for completed_mol in "${COMPLETED_MOLS[@]}"; do
+  for pattern in "${completed_mol}.out" "${completed_mol}.inp" \
+                 "${completed_mol}_mayer_mat.txt" "${completed_mol}_wiberg_mat.txt" \
+                 "${completed_mol}_fuzzy_mat.txt" "${completed_mol}_mayer_log.out" \
+                 "${completed_mol}_wiberg_log.out" "${completed_mol}_fuzzy_log.out"; do
+    found_file=$(find "$R2_WORK/result_contents" -name "$pattern" -type f | head -1)
+    if [ -n "$found_file" ] && [ -f "$found_file" ]; then
+      cp "$found_file" "$R2_BUILD/"
+    fi
+  done
+done
+
+> "$R2_BUILD/skip.txt"
+for completed_mol in "${COMPLETED_MOLS[@]}"; do
+  echo "$completed_mol" >> "$R2_BUILD/skip.txt"
+done
+
+ORIGINAL_RELPATH="${ORIGINAL_ZIP#$INPUTS_ABS/}"
+ORIGINAL_RELDIR=$(dirname "$ORIGINAL_RELPATH")
+R2_DEST_DIR="$ROUND2_DIR/$ORIGINAL_RELDIR"
+mkdir -p "$R2_DEST_DIR"
+
+R2_ZIP="$R2_DEST_DIR/$ZIP_NAME"
+(cd "$R2_BUILD" && zip -q "$(cd "{{SCRIPT_DIR:-.}}" && pwd)/$R2_ZIP" *)
+
+echo "Created round-2 zip: $R2_ZIP"
+rm -rf "$R2_WORK"
+```
+
+=== END CONCEPT ===
+
+=== CONCEPT: workflow_status_dashboard_cli ===
+Description: CLI dashboard summarizing HTCondor queue, chunk submission progress, held reasons, results/backups, tmux sessions, and escalation tracking.
+Category: monitoring
+Invariants:
+  - "Must not fail if condor_q or tmux are unavailable; degrade gracefully."
+  - "Held job summary uses HoldReason aggregation."
+Interface_inputs: {{USER_ID}}
+Interface_outputs: Human-readable status report
+Scheduler: htcondor
+Tool: any
+Infrastructure: shared_fs
+Tested_by: golddigr
+Notes: status.sh as-is.
+
+```bash
+{{PASTE_FILE: status.sh WITH {{DOUBLE_BRACE}} PLACEHOLDERS WHERE NEEDED}}
+```
+
+=== END CONCEPT ===

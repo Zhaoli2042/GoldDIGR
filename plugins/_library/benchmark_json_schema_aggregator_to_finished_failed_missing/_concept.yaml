@@ -1,0 +1,28 @@
+name: benchmark_json_schema_aggregator_to_finished_failed_missing
+description: Aggregate per-batch benchmark JSONs into txt/tsv summaries and emit finished (SMILES), failed (SMILES PREFIX),
+  and missing (SMILES PREFIX) lists.
+category: monitoring
+interface:
+  inputs:
+  - BENCH_DIR
+  - ORIGINAL_SMILES_PATH
+  - output paths (SUMMARY_TXT/TSV
+  - FINISHED/FAILED/MISSING)
+  outputs:
+  - Summary txt/tsv + three SMILES lists for retry loop
+invariants:
+- 'Assumes benchmark JSON fields: batch_id, hostname, slurm.partition, slurm.job_id, elapsed_hms, counts{done,total,failed},
+  batch_json_path, completed_smiles, per_smiles_status.'
+- 'Missing set computed as: original - finished - failed.'
+- Failed SMILES are those with per_smiles_status[smiles] == 'fail'.
+variants:
+  Auto3D-GPU-Slurm_default:
+    file: Auto3D-GPU-Slurm_default.sh
+    lines: 122
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - get_auto3d_calc_status
+    notes: This is the ROUND2/resume driver for iterative retries (produces next input lists).

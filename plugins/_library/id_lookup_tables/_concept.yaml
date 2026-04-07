@@ -1,0 +1,22 @@
+name: id_lookup_tables
+description: Fetch id/name mappings for a table to support foreign-key insertion.
+category: adapters
+interface:
+  inputs:
+  - connection
+  - table
+  outputs:
+  - Indices dict (name -> id)
+invariants:
+- Only accepts a fixed allowlist of table names.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 28
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions_db.py
+    notes: Used by stability collection to map metals/halides/ligands.

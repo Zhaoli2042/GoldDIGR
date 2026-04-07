@@ -1,0 +1,48 @@
+name: parameterized_lammps_input_template
+description: Write a full LAMMPS input script for NVE relax cycles + NPT + NVT with averaged thermo outputs and optional tethering.
+category: science
+interface:
+  inputs:
+  - name
+  - data_name
+  - temperature
+  - pressure
+  - pressure_axis
+  - timesteps_npt
+  - timesteps_nvt
+  - nve_cycles
+  - nve_dist
+  - extension_number
+  - tether
+  - tether_types
+  - avg_freq
+  - coords_freq
+  - thermo_freq
+  - dump4avg
+  - fixes
+  - commands
+  - tip4p
+  - kspace
+  - submission_manager
+  - output
+  - flag_velocities
+  - flag_ecoh
+  - neighbor_build
+  - submit_file
+  outputs:
+  - LAMMPS input file (default nvt.in.init)
+invariants:
+- Pressure axis must be one of iso/x/y/z; kspace must be ewald or pppm; TIP4P cannot be used with ewald.
+- Writes variables for run counter and self-edits the input file to increment run.
+- 'Writes restart and data at end: extend.end.restart / extend.end.data.'
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 274
+    scheduler: any
+    tool: lammps
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions_writers.py
+    notes: This is the exact writer used by step1.build_bulk_sims.py.

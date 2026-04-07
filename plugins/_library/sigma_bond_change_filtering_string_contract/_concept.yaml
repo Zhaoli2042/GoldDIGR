@@ -1,0 +1,22 @@
+name: sigma_bond_change_filtering_string_contract
+description: Interpret bond_changes strings and filter to sigma changes only (formation/breaking vs pi changes).
+category: science
+interface:
+  inputs:
+  - bond_changes_str
+  outputs:
+  - reactive_atom_indices_set and/or constraint_pairs_list
+invariants:
+- 'Sigma change definition: n->(not n) or (not n)->n; pi changes are excluded.'
+- 'Bond change string format must match regex: ElemIIdx-ElemJIdx:old>new separated by '';''.'
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 99
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Used to drive constraints and basis focusing.

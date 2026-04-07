@@ -1,0 +1,31 @@
+name: sge_array_task_wrapper_two_phase
+description: SGE array task wrapper that selects a job directory, runs preprocessing in container, packages tarball, then
+  runs full workflow.
+category: scheduler
+interface:
+  inputs:
+  - SGE_TASK_ID
+  - SGE_O_WORKDIR
+  - job_list.txt
+  - jobs/*
+  - scripts/*
+  outputs:
+  - logs/*
+  - jobs/*/output/*
+  - jobs/*/final_status.json
+invariants:
+- Must be submitted from pipeline directory so SGE_O_WORKDIR points to correct tree.
+- Fail fast if required per-job inputs missing (R.xyz/P.xyz/TS.xyz/config.json).
+- 'Two-phase execution: preprocessing must create workflow_status.json before tarball packaging.'
+- Charge/mult read from per-job config.json and passed into preprocessing.
+variants:
+  DFT-COPT-TSOPT-CRC-SGE_default:
+    file: DFT-COPT-TSOPT-CRC-SGE_default.sh
+    lines: 202
+    scheduler: sge
+    tool: singularity
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Full tested script body.

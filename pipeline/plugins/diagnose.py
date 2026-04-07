@@ -107,6 +107,11 @@ SAFETY RULES — ABSOLUTE:
 2. You may NEVER modify the user's science scripts (run_orca_wbo.sh, etc.)
 3. You may NEVER modify plugin.yaml
 4. You may create new files in glue/ if needed
+5. You may NEVER create stub/fake runners that produce output without running \
+   the actual workflow. If the real runner or entry-point is missing, the fix \
+   must make it available (copy, symlink, fix path) — NOT create a fake that \
+   writes placeholder output to satisfy the checker. A "skip-but-succeed" \
+   path is NOT a valid fix.
 
 CRITICAL: DO NOT REWRITE ENTIRE FILES.
 Output ONLY the specific changes needed using FIND/REPLACE blocks. \
@@ -564,10 +569,10 @@ def diagnose_results(
         else:
             # No pilot_results.json — scan the directory directly
             print("⚠  No pilot_results.json found. Scanning directory for logs...\n")
-            from .pilot import _collect_results
-            results = _collect_results(pilot_dir)
+            from ._utils import collect_results
+            results = collect_results(pilot_dir)
 
-            # If _collect_results found nothing, broaden the search.
+            # If collect_results found nothing, broaden the search.
             # In workspace-isolation mode, snapshot dirs have logs at the ROOT
             # (launch.log, launch_error.log) not in a logs/ subdirectory.
             if results["summary"]["total"] == 0:
@@ -979,10 +984,10 @@ def diagnose_production(
     provider: str = "openai",
     model: str = "gpt-4o",
 ) -> Dict[str, Any]:
-    from .pilot import _collect_results
+    from ._utils import collect_results
 
     print(f"\n🔍 Scanning production results: {results_dir}")
-    results = _collect_results(results_dir)
+    results = collect_results(results_dir)
     manifest = load_manifest_safe(plugin_dir)
 
     return diagnose_results(

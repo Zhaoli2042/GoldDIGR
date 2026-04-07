@@ -1,0 +1,69 @@
+name: result_packaging_tarball
+description: Package selected outputs into a gzipped tarball using null-delimited file list.
+category: adapters
+interface:
+  inputs:
+  - WORKDIR (implicit CWD)
+  outputs:
+  - results.tar.gz
+invariants:
+- Writes into BATCH_DICTS_PATH and names files batch_{i}.json.
+- Use find -maxdepth 1 and explicit patterns to avoid packing heavy scratch files.
+- Create tarball from within OUTPUT_DIR so paths inside archive are flat and predictable.
+- Always produce results.tar.gz even on failure; minimal tarball contains status.json.
+- 'Include exactly: *.out, *.xyz, *.inp, *_mat.txt, *_log.out, status.json.'
+- Use find -print0 + tar --null -T - to safely handle filenames.
+- Always include status.json.
+- Use find -print0 and tar --null -T - to safely handle filenames.
+- Tarball must include ts_guess.xyz and workflow_status.json plus R.xyz/P.xyz/config.json.
+variants:
+  DFT-singlepoint-Anvil-Slurm_default:
+    file: DFT-singlepoint-Anvil-Slurm_default.sh
+    lines: 17
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - golddigr_orca_multiwfn_anvil
+    notes: Produces results.tar.gz in current directory; external wrapper may rename/move it.
+  pack_selected_outputs_plus_status_into_results_tarball:
+    file: pack_selected_outputs_plus_status_into_results_tarball.sh
+    lines: 16
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: isolated
+    tested_by:
+    - dft_energy_orca_multiwfn
+    notes: Uses tar with --null -T - for safe filenames.
+  pack_selected_outputs_emit_minimal_tarball_when_missing:
+    file: pack_selected_outputs_emit_minimal_tarball_when_missing.sh
+    lines: 22
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - golddigr
+    notes: From run_orca_wbo.sh section 6.
+  write_json_batch_shards_to_disk:
+    file: write_json_batch_shards_to_disk.sh
+    lines: 17
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - purdue_standby_auto3d_auto_batch
+    notes: File-based glue between batching and submission.
+  single_handoff_results_tar_gz_for_container_consumption:
+    file: single_handoff_results_tar_gz_for_container_consumption.sh
+    lines: 19
+    scheduler: any
+    tool: tar
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: "Matches container workflow\u2019s --input contract."

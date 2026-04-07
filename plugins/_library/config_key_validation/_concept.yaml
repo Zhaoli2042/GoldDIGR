@@ -1,0 +1,35 @@
+name: config_key_validation
+description: Read a simple key/value config file, enforce required keys, and cast selected values to int.
+category: operational
+interface:
+  inputs:
+  - config_file
+  outputs:
+  - config (dict)
+invariants:
+- Only override keys explicitly specified; unknown ORCA keys are ignored with a warning.
+- 'Lines starting with # are comments; inline comments after # are stripped.'
+- Cast JOB_MD_PPN/JOB_MD_NODES/JOB_MD_WALLTIME to int.
+- Abort if any required setting is missing.
+- orca settings are nested under 'orca' key; top-level keys are charge/mult/nprocs/maxcore.
+variants:
+  Perovskite-ligand-screening_default:
+    file: Perovskite-ligand-screening_default.sh
+    lines: 53
+    scheduler: any
+    tool: any
+    infrastructure:
+      filesystem: shared_fs
+    tested_by:
+    - MD/lib/functions.py
+    notes: Required keys are workflow-specific; keep the list as-is unless you also update downstream consumers.
+  json_config_merge_known_keys_into_orca_defaults:
+    file: json_config_merge_known_keys_into_orca_defaults.inp
+    lines: 66
+    scheduler: any
+    tool: orca
+    infrastructure:
+      filesystem: any
+    tested_by:
+    - '{{PLUGIN_NAME}}'
+    notes: Prints applied overrides.
