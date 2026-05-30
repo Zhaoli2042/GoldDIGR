@@ -16,7 +16,8 @@ Read-only on --src-dir; nothing is ever written there.
 import os, sys, time, argparse, importlib.util
 from multiprocessing import Pool
 
-TRIM_SRC = "/scratch/negishi/li1724/SI-Downloads/SI_Agent/zip_trim_experiment/trim_one_zip_v2.py"
+from pathlib import Path as _Path
+TRIM_SRC = str(_Path(__file__).resolve().parent / "trim_one_zip_v2.py")
 
 
 def load_trim():

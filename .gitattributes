@@ -10,4 +10,3 @@
 *.jpg binary
 *.sif binary
 data_deposit/052026-all-DFT-IRC-energies.csv filter=lfs diff=lfs merge=lfs -text
-data_deposit/transition_metal_oxidation_states.csv filter=lfs diff=lfs merge=lfs -text

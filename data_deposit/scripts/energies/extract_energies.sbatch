@@ -12,10 +12,15 @@
 
 set -euo pipefail
 
-SCRIPT=/scratch/negishi/li1724/SI-Downloads/SI_Agent/051926-DFT-Calcs/missing_DFT_zips_finished_first/extract_energies.py
-KEYS=/scratch/negishi/li1724/SI-Downloads/SI_Agent/051926-DFT-Calcs/missing_DFT_zips_finished_first/four_class_keys.txt
-ZIP_DIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_zips
-OUTPUT=/scratch/negishi/li1724/SI-Downloads/SI_Agent/051926-DFT-Calcs/missing_DFT_zips_finished_first/energies_${SLURM_JOB_ID}.csv
+# --- CONFIGURE FOR YOUR SYSTEM ---
+# SCRIPT  : path to extract_energies.py
+# KEYS    : newline-separated reaction keys to process
+# ZIP_DIR : root of the per-reaction .zip archives
+# OUTPUT  : output CSV (job-id suffix optional)
+SCRIPT=${SCRIPT:-/path/to/extract_energies.py}
+KEYS=${KEYS:-/path/to/reaction_keys.txt}
+ZIP_DIR=${ZIP_DIR:-/path/to/zip_archives}
+OUTPUT=${OUTPUT:-energies_${SLURM_JOB_ID}.csv}
 
 echo "Job:       $SLURM_JOB_ID on $(hostname)"
 echo "CPUs:      $SLURM_CPUS_PER_TASK"

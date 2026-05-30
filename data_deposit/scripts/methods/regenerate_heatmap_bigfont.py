@@ -9,10 +9,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-HERE   = Path("/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_tar_zsts/manuscript_revisions/comp_details_handoff_2026-05-29")
-SRC    = HERE / "xtb_irc_convergence_functional_x_class.csv"
-OUTDIR = Path("/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_tar_zsts/manuscript_revisions/assemble_SI")
-OUT    = OUTDIR / "xtb_irc_convergence_heatmap.png"
+# --- CONFIGURE FOR YOUR SYSTEM (or pass as env vars) ---
+# SRC : path to xtb_irc_convergence_functional_x_class.csv
+# OUT : output path for the heatmap PNG
+import os
+SRC = Path(os.environ.get(
+    "SRC",
+    Path(__file__).resolve().parents[2] / "convergence" / "xtb_irc_convergence_functional_x_class.csv"
+))
+OUT = Path(os.environ.get(
+    "OUT",
+    Path.cwd() / "xtb_irc_convergence_heatmap.png"
+))
 
 MIN_TOTAL_N_FN = 1500
 KEEP_CLASSES = ["3d_TM", "4d_TM", "5d_TM",

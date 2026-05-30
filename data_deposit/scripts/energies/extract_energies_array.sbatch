@@ -13,9 +13,12 @@
 
 set -euo pipefail
 
-WORKDIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/051926-DFT-Calcs/missing_DFT_zips_finished_first
+# --- CONFIGURE FOR YOUR SYSTEM ---
+# WORKDIR  : directory containing extract_energies.py and the chunk lists.
+# ZIP_DIR  : root of the per-reaction .zip archives.
+WORKDIR=${WORKDIR:-/path/to/workdir}
 SCRIPT="$WORKDIR/extract_energies.py"
-ZIP_DIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_zips
+ZIP_DIR=${ZIP_DIR:-/path/to/zip_archives}
 CHUNKDIR="$WORKDIR/full_scan_chunks"
 
 IDX=$(printf "%03d" "$SLURM_ARRAY_TASK_ID")

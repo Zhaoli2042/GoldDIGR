@@ -13,10 +13,14 @@
 
 set -euo pipefail
 
-WORKDIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/051926-DFT-Calcs/missing_DFT_zips_finished_first
+# --- CONFIGURE FOR YOUR SYSTEM ---
+# WORKDIR  : directory containing trim_dataset_worker.py and the chunk lists.
+# SRC_DIR  : source archives (read-only).
+# DST_DIR  : destination for slimmed archives.
+WORKDIR=${WORKDIR:-/path/to/workdir}
 SCRIPT="$WORKDIR/trim_dataset_worker.py"
-SRC_DIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_zips
-DST_DIR=/scratch/negishi/li1724/SI-Downloads/SI_Agent/doi_zips_slim
+SRC_DIR=${SRC_DIR:-/path/to/source/archives}
+DST_DIR=${DST_DIR:-/path/to/slim/output}
 CHUNKDIR="$WORKDIR/trim_chunks"
 
 IDX=$(printf "%03d" "$SLURM_ARRAY_TASK_ID")
@@ -34,8 +38,8 @@ echo "Start:      $(date)"
 # threshold, so SLURM does not retry and we leave headroom for
 # whatever else is consuming inodes on the account.
 INODE_GUARD=9700000
-FILES_USED=$(lfs quota -u "$USER" /scratch/negishi 2>/dev/null | tail -1 | awk '{print $5}')
-FILES_LIMIT=$(lfs quota -u "$USER" /scratch/negishi 2>/dev/null | tail -1 | awk '{print $7}')
+FILES_USED=$(lfs quota -u "$USER" "${LUSTRE_MOUNT:-/scratch}" 2>/dev/null | tail -1 | awk '{print $5}')
+FILES_LIMIT=$(lfs quota -u "$USER" "${LUSTRE_MOUNT:-/scratch}" 2>/dev/null | tail -1 | awk '{print $7}')
 echo "Quota:      ${FILES_USED} / ${FILES_LIMIT} inodes  (guard at ${INODE_GUARD})"
 if [ -n "$FILES_USED" ] && [ "$FILES_USED" -ge "$INODE_GUARD" ]; then
     echo "ABORT: inode usage $FILES_USED has reached guard threshold $INODE_GUARD."
